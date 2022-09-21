@@ -581,7 +581,8 @@ class LoadImagesAndLabels(Dataset):  # for training/testing
             #img, labels = self.albumentations(img, labels)
 
             # Augment colorspace
-            augment_hsv(img, hgain=hyp['hsv_h'], sgain=hyp['hsv_s'], vgain=hyp['hsv_v'])
+            if img.shape[2] == 3:
+                augment_hsv(img, hgain=hyp['hsv_h'], sgain=hyp['hsv_s'], vgain=hyp['hsv_v'])
 
             # Apply cutouts
             # if random.random() < 0.9:
@@ -623,7 +624,10 @@ class LoadImagesAndLabels(Dataset):  # for training/testing
             labels_out[:, 1:] = torch.from_numpy(labels)
 
         # Convert
-        img = img[:, :, ::-1].transpose(2, 0, 1)  # BGR to RGB, to 3x416x416
+        if img.shape[2] == 3:
+            img = img[:, :, ::-1].transpose(2, 0, 1)  # BGR to RGB, to 3x416x416
+        else:
+            img = img.transpose(2, 0, 1)  #to 3x416x416
         img = np.ascontiguousarray(img)
 
         return torch.from_numpy(img), labels_out, self.img_files[index], shapes
