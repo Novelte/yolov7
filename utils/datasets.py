@@ -577,6 +577,9 @@ class LoadImagesAndLabels(Dataset):  # for training/testing
             if labels.size:  # normalized xywh to pixel xyxy format
                 labels[:, 1:] = xywhn2xyxy(labels[:, 1:], ratio[0] * w, ratio[1] * h, padw=pad[0], padh=pad[1])
 
+        if len(img.shape) != 3:
+            img = np.expand_dims(img, axis=2)
+
         if self.augment:
             # Augment imagespace
             if not mosaic:
@@ -634,10 +637,12 @@ class LoadImagesAndLabels(Dataset):  # for training/testing
             labels_out[:, 1:] = torch.from_numpy(labels)
 
         # Convert
-        if img.shape[2] == 3:
-            img = img[:, :, ::-1].transpose(2, 0, 1)  # BGR to RGB, to 3x416x416
-        else:
-            img = img.transpose(2, 0, 1)  #to 3x416x416
+        # if img.shape[2] == 3:
+        #     img = img[:, :, ::-1].transpose(2, 0, 1)  # BGR to RGB, to 3x416x416
+        # else:
+        #     img = img.transpose(2, 0, 1)  #to 3x416x416
+
+        img = img[:, :, ::-1].transpose(2, 0, 1)  # BGR to RGB, to 3x416x416
         img = np.ascontiguousarray(img)
         print(f"\n\nimage shape: {img.shape}\n\n")
         return torch.from_numpy(img), labels_out, self.img_files[index], shapes
@@ -678,21 +683,23 @@ class LoadImagesAndLabels(Dataset):  # for training/testing
 
 # Ancillary functions --------------------------------------------------------------------------------------------------
 def load_image(self, index):
-    if self.ch == 1:
-        read_mode = cv2.IMREAD_GRAYSCALE
-    else:
-        read_mode = cv2.IMREAD_COLOR
     # loads 1 image from dataset, returns img, original hw, resized hw
     img = self.imgs[index]
     if img is None:  # not cached
         path = self.img_files[index]
-        img = cv2.imread(path, read_mode)  # BGR
+        if self.ch == 1:
+            img = cv2.imread(path, cv2.IMREAD_GRAYSCALE) 
+        else:
+            img = cv2.imread(path, cv2.IMREAD_COLOR)  # BGR
+        
         assert img is not None, 'Image Not Found ' + path
         h0, w0 = img.shape[:2]  # orig hw
         r = self.img_size / max(h0, w0)  # resize image to img_size
         if r != 1:  # always resize down, only resize up if training with augmentation
             interp = cv2.INTER_AREA if r < 1 and not self.augment else cv2.INTER_LINEAR
             img = cv2.resize(img, (int(w0 * r), int(h0 * r)), interpolation=interp)
+            if len(img.shape) != 3:
+                img = np.expand_dims(img, axis=2)
         return img, (h0, w0), img.shape[:2]  # img, hw_original, hw_resized
     else:
         return self.imgs[index], self.img_hw0[index], self.img_hw[index]  # img, hw_original, hw_resized
