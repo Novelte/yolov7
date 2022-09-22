@@ -64,6 +64,7 @@ def exif_size(img):
 
 def create_dataloader(path, imgsz, batch_size, stride, opt, hyp=None, augment=False, cache=False, pad=0.0, rect=False,
                       rank=-1, world_size=1, workers=8, image_weights=False, quad=False, prefix='', ch=3):
+    
     # Make sure only the first process in DDP process the dataset first, and the following others can use the cache
     with torch_distributed_zero_first(rank):
         dataset = LoadImagesAndLabels(path, imgsz, batch_size,
@@ -461,6 +462,7 @@ class LoadImagesAndLabels(Dataset):  # for training/testing
                 self.im_cache_dir.mkdir(parents=True, exist_ok=True)
             gb = 0  # Gigabytes of cached images
             self.img_hw0, self.img_hw = [None] * n, [None] * n
+            print(f"if cache_images ch: {self.ch}")
             results = ThreadPool(8).imap(lambda x: load_image(*x), zip(repeat(self), range(n)))
             pbar = tqdm(enumerate(results), total=n)
             for i, x in pbar:
@@ -563,6 +565,7 @@ class LoadImagesAndLabels(Dataset):  # for training/testing
 
         else:
             # Load image
+            print(f"__getitem__ ch: {self.ch}")
             img, (h0, w0), (h, w) = load_image(self, index)
 
             # Letterbox
@@ -729,6 +732,7 @@ def load_mosaic(self, index):
     indices = [index] + random.choices(self.indices, k=3)  # 3 additional image indices
     for i, index in enumerate(indices):
         # Load image
+        print(f"load_mosaic ch: {self.ch}")
         img, _, (h, w) = load_image(self, index)
 
         # place img in img4
@@ -787,6 +791,7 @@ def load_mosaic9(self, index):
     indices = [index] + random.choices(self.indices, k=8)  # 8 additional image indices
     for i, index in enumerate(indices):
         # Load image
+        print(f"load_mosaic9: {self.ch}")
         img, _, (h, w) = load_image(self, index)
 
         # place img in img9

@@ -98,8 +98,11 @@ def train(hyp, opt, device, tb_writer=None):
     train_path = data_dict['train']
     test_path = data_dict['val']
 
-    if data_dict['ch'] is None:
+    try :
+        ch = data_dict['ch']
+    except: 
         ch = 3
+    
 
     # Freeze
     freeze = [f'model.{x}.' for x in (freeze if len(freeze) > 1 else range(freeze[0]))]  # parameter names to freeze (full or partial)
