@@ -76,7 +76,10 @@ def test(data,
     nc = 1 if single_cls else int(data['nc'])  # number of classes
     iouv = torch.linspace(0.5, 0.95, 10).to(device)  # iou vector for mAP@0.5:0.95
     niou = iouv.numel()
-
+    try :
+        ch = data['ch']
+    except: 
+        ch = 3
     # Logging
     log_imgs = 0
     if wandb_logger and wandb_logger.wandb:
@@ -87,7 +90,7 @@ def test(data,
             model(torch.zeros(1, 3, imgsz, imgsz).to(device).type_as(next(model.parameters())))  # run once
         task = opt.task if opt.task in ('train', 'val', 'test') else 'val'  # path to train/val/test images
         dataloader = create_dataloader(data[task], imgsz, batch_size, gs, opt, pad=0.5, rect=True,
-                                       prefix=colorstr(f'{task}: '))[0]
+                                       prefix=colorstr(f'{task}: '), ch=ch)[0]
 
     seen = 0
     confusion_matrix = ConfusionMatrix(nc=nc)
