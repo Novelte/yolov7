@@ -565,7 +565,7 @@ class LoadImagesAndLabels(Dataset):  # for training/testing
 
         else:
             # Load image
-            print(f"__getitem__ ch: {self.ch}")
+            # print(f"__getitem__ ch: {self.ch}")
             img, (h0, w0), (h, w) = load_image(self, index)
 
             # Letterbox
