@@ -738,7 +738,7 @@ def load_mosaic(self, index):
     indices = [index] + random.choices(self.indices, k=3)  # 3 additional image indices
     for i, index in enumerate(indices):
         # Load image
-        print(f"load_mosaic ch: {self.ch}")
+        # print(f"load_mosaic ch: {self.ch}")
         img, _, (h, w) = load_image(self, index)
 
         # place img in img4
@@ -797,7 +797,7 @@ def load_mosaic9(self, index):
     indices = [index] + random.choices(self.indices, k=8)  # 8 additional image indices
     for i, index in enumerate(indices):
         # Load image
-        print(f"load_mosaic9: {self.ch}")
+        # print(f"load_mosaic9: {self.ch}")
         img, _, (h, w) = load_image(self, index)
 
         # place img in img9
