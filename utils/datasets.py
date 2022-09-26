@@ -644,8 +644,7 @@ class LoadImagesAndLabels(Dataset):  # for training/testing
 
         img = img[:, :, ::-1].transpose(2, 0, 1)  # BGR to RGB, to 3x416x416
         img = np.ascontiguousarray(img)
-        print(f"\n\nimage shape: {img.shape}\n\n")
-        return torch.from_numpy(img), labels_out, self.img_files[index], shapes
+        return torch.from_numpy(img.copy()), labels_out, self.img_files[index], shapes
 
     @staticmethod
     def collate_fn(batch):
