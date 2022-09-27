@@ -93,7 +93,7 @@ def train(hyp, opt, device, tb_writer=None):
         logger.info('Transferred %g/%g items from %s' % (len(state_dict), len(model.state_dict()), weights))  # report
     else:
         model = Model(opt.cfg, ch=3, nc=nc, anchors=hyp.get('anchors')).to(device)  # create
-    print("model created")
+    # print("model created")
 
     with torch_distributed_zero_first(rank):
         check_dataset(data_dict)  # check
@@ -103,7 +103,7 @@ def train(hyp, opt, device, tb_writer=None):
         ch = data_dict['ch']
     except: 
         ch = 3
-    print("data checked")
+    # print("data checked")
 
     # Freeze
     freeze = [f'model.{x}.' for x in (freeze if len(freeze) > 1 else range(freeze[0]))]  # parameter names to freeze (full or partial)
@@ -194,7 +194,7 @@ def train(hyp, opt, device, tb_writer=None):
     logger.info('Optimizer groups: %g .bias, %g conv.weight, %g other' % (len(pg2), len(pg1), len(pg0)))
     del pg0, pg1, pg2
 
-    print("finished setup optimizer")
+    # print("finished setup optimizer")
     
     # Scheduler https://arxiv.org/pdf/1812.01187.pdf
     # https://pytorch.org/docs/stable/_modules/torch/optim/lr_scheduler.html#OneCycleLR
@@ -259,7 +259,7 @@ def train(hyp, opt, device, tb_writer=None):
     mlc = np.concatenate(dataset.labels, 0)[:, 0].max()  # max label class
     nb = len(dataloader)  # number of batches
     assert mlc < nc, 'Label class %g exceeds nc=%g in %s. Possible class labels are 0-%g' % (mlc, nc, opt.data, nc - 1)
-    print("dataloader created")
+    # print("dataloader created")
 
     # Process 0
     if rank in [-1, 0]:
@@ -316,10 +316,10 @@ def train(hyp, opt, device, tb_writer=None):
                 f'Starting training for {epochs} epochs...')
     torch.save(model, wdir / 'init.pt')
 
-    print("begin training")
+    # print("begin training")
     for epoch in range(start_epoch, epochs):  # epoch ------------------------------------------------------------------
         model.train()
-        print("model.train done")
+        # print("model.train done")
         # Update image weights (optional)
         if opt.image_weights:
             # Generate indices
@@ -346,13 +346,13 @@ def train(hyp, opt, device, tb_writer=None):
         if rank in [-1, 0]:
             pbar = tqdm(pbar, total=nb)  # progress bar
         optimizer.zero_grad()
-        print("batch?")
+        # print("batch?")
         for i, (imgs, targets, paths, _) in pbar:  # batch -------------------------------------------------------------
             ni = i + nb * epoch  # number integrated batches (since train start)
-            print("write to device")
-            print(f"device type: ", device.type)
+            # print("write to device")
+            # print(f"device type: ", device.type)
             imgs = imgs.to(device, non_blocking=True).float() / 255.0  # uint8 to float32, 0-255 to 0.0-1.0
-            print("Warmup")
+            # print("Warmup")
             # Warmup
             if ni <= nw:
                 xi = [0, nw]  # x interp
@@ -365,7 +365,7 @@ def train(hyp, opt, device, tb_writer=None):
                         x['momentum'] = np.interp(ni, xi, [hyp['warmup_momentum'], hyp['momentum']])
 
             # Multi-scale
-            print("Multi-Scale")
+            # print("Multi-Scale")
             if opt.multi_scale:
                 sz = random.randrange(imgsz * 0.5, imgsz * 1.5 + gs) // gs * gs  # size
                 sf = sz / max(imgs.shape[2:])  # scale factor
@@ -374,8 +374,8 @@ def train(hyp, opt, device, tb_writer=None):
                     imgs = F.interpolate(imgs, size=ns, mode='bilinear', align_corners=False)
 
             # Forward
-            print("Forward")
-            print(f"imgs.shape{imgs[0].size()}")
+            # print("Forward")
+            # print(f"imgs.shape{imgs[0].size()}")
             with amp.autocast(enabled=cuda):
                 pred = model(imgs)  # forward
                 if 'loss_ota' not in hyp or hyp['loss_ota'] == 1:
@@ -388,11 +388,11 @@ def train(hyp, opt, device, tb_writer=None):
                     loss *= 4.
 
             # Backward
-            print("Backward")
+            # print("Backward")
             scaler.scale(loss).backward()
 
             # Optimize
-            print("Optimize")
+            # print("Optimize")
             if ni % accumulate == 0:
                 scaler.step(optimizer)  # optimizer.step
                 scaler.update()
@@ -401,7 +401,7 @@ def train(hyp, opt, device, tb_writer=None):
                     ema.update(model)
 
             # Print
-            print("Print")
+            # print("Print")
             if rank in [-1, 0]:
                 mloss = (mloss * i + loss_items) / (i + 1)  # update mean losses
                 mem = '%.3gG' % (torch.cuda.memory_reserved() / 1E9 if torch.cuda.is_available() else 0)  # (GB)
@@ -424,11 +424,11 @@ def train(hyp, opt, device, tb_writer=None):
         # end epoch ----------------------------------------------------------------------------------------------------
 
         # Scheduler
-        print("Scheduler")
+        # print("Scheduler")
         lr = [x['lr'] for x in optimizer.param_groups]  # for tensorboard
         scheduler.step()
         
-        print("DDP?")
+        # print("DDP?")
         # DDP process 0 or single-GPU
         if rank in [-1, 0]:
             # mAP
@@ -450,14 +450,14 @@ def train(hyp, opt, device, tb_writer=None):
                                                  is_coco=is_coco)
 
             # Write
-            print("Write")
+            # print("Write")
             with open(results_file, 'a') as f:
                 f.write(s + '%10.4g' * 7 % results + '\n')  # append metrics, val_loss
             if len(opt.name) and opt.bucket:
                 os.system('gsutil cp %s gs://%s/results/results%s.txt' % (results_file, opt.bucket, opt.name))
 
             # Log
-            print("wandb log")
+            # print("wandb log")
             tags = ['train/box_loss', 'train/obj_loss', 'train/cls_loss',  # train loss
                     'metrics/precision', 'metrics/recall', 'metrics/mAP_0.5', 'metrics/mAP_0.5:0.95',
                     'val/box_loss', 'val/obj_loss', 'val/cls_loss',  # val loss
@@ -469,14 +469,14 @@ def train(hyp, opt, device, tb_writer=None):
                     wandb_logger.log({tag: x})  # W&B
 
             # Update best mAP
-            print("wandb end epoch")
+            # print("wandb end epoch")
             fi = fitness(np.array(results).reshape(1, -1))  # weighted combination of [P, R, mAP@.5, mAP@.5-.95]
             if fi > best_fitness:
                 best_fitness = fi
             wandb_logger.end_epoch(best_result=best_fitness == fi)
 
             # Save model
-            print("save model")
+            # print("save model")
             if (not opt.nosave) or (final_epoch and not opt.evolve):  # if save
                 ckpt = {'epoch': epoch,
                         'best_fitness': best_fitness,
@@ -504,7 +504,7 @@ def train(hyp, opt, device, tb_writer=None):
                         wandb_logger.log_model(
                             last.parent, opt, epoch, fi, best_model=best_fitness == fi)
                 del ckpt
-        print("end of epoch")
+        # print("end of epoch")
         # end epoch ----------------------------------------------------------------------------------------------------
     # end training
     if rank in [-1, 0]:
@@ -596,12 +596,12 @@ if __name__ == '__main__':
     #if opt.global_rank in [-1, 0]:
     #    check_git_status()
     #    check_requirements()
-    print(f"in train.py ranking: {opt.global_rank}")
+    # print(f"in train.py ranking: {opt.global_rank}")
     # Resume
     wandb_run = check_wandb_resume(opt)
-    print("checked wandb resume")
+    # print("checked wandb resume")
     if opt.resume and not wandb_run:  # resume an interrupted run
-        print("resume")
+        # print("resume")
         ckpt = opt.resume if isinstance(opt.resume, str) else get_latest_run()  # specified or most recent path
         assert os.path.isfile(ckpt), 'ERROR: --resume checkpoint does not exist'
         apriori = opt.global_rank, opt.local_rank
@@ -610,18 +610,16 @@ if __name__ == '__main__':
         opt.cfg, opt.weights, opt.resume, opt.batch_size, opt.global_rank, opt.local_rank = '', ckpt, True, opt.total_batch_size, *apriori  # reinstate
         logger.info('Resuming training from %s' % ckpt)
     else:
-        print("not resume")
+        # print("not resume")
         # opt.hyp = opt.hyp or ('hyp.finetune.yaml' if opt.weights else 'hyp.scratch.yaml')
         opt.data, opt.cfg, opt.hyp = check_file(opt.data), check_file(opt.cfg), check_file(opt.hyp)  # check files
-        print("checked file")
+        # print("checked file")
         assert len(opt.cfg) or len(opt.weights), 'either --cfg or --weights must be specified'
         opt.img_size.extend([opt.img_size[-1]] * (2 - len(opt.img_size)))  # extend to 2 sizes (train, test)
         opt.name = 'evolve' if opt.evolve else opt.name
-        print("increment path")
+        # print("increment path")
         opt.save_dir = increment_path(Path(opt.project) / opt.name, exist_ok=opt.exist_ok | opt.evolve)  # increment run
-    
-    print("rubbish")
-    
+       
     # DDP mode
     opt.total_batch_size = opt.batch_size
     device = select_device(opt.device, batch_size=opt.batch_size)
@@ -632,7 +630,7 @@ if __name__ == '__main__':
         dist.init_process_group(backend='nccl', init_method='env://')  # distributed backend
         assert opt.batch_size % opt.world_size == 0, '--batch-size must be multiple of CUDA device count'
         opt.batch_size = opt.total_batch_size // opt.world_size
-    print(f"loading hyp: {opt.hyp}")
+    # print(f"loading hyp: {opt.hyp}")
     # Hyperparameters
     with open(opt.hyp) as f:
         hyp = yaml.load(f, Loader=yaml.SafeLoader)  # load hyps
@@ -641,7 +639,7 @@ if __name__ == '__main__':
     logger.info(opt)
     if not opt.evolve:
         tb_writer = None  # init loggers
-        print("no evolve")
+        # print("no evolve")
         if opt.global_rank in [-1, 0]:
             prefix = colorstr('tensorboard: ')
             logger.info(f"{prefix}Start with 'tensorboard --logdir {opt.project}', view at http://localhost:6006/")
@@ -650,7 +648,7 @@ if __name__ == '__main__':
 
     # Evolve hyperparameters (optional)
     else:
-        print("evolve")
+        # print("evolve")
         # Hyperparameter evolution metadata (mutation scale 0-1, lower_limit, upper_limit)
         meta = {'lr0': (1, 1e-5, 1e-1),  # initial learning rate (SGD=1E-2, Adam=1E-3)
                 'lrf': (1, 0.01, 1.0),  # final OneCycleLR learning rate (lr0 * lrf)
