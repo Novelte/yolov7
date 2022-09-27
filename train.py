@@ -375,6 +375,7 @@ def train(hyp, opt, device, tb_writer=None):
 
             # Forward
             print("Forward")
+            print(f"imgs.shape{imgs[0].size()}")
             with amp.autocast(enabled=cuda):
                 pred = model(imgs)  # forward
                 if 'loss_ota' not in hyp or hyp['loss_ota'] == 1:
