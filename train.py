@@ -319,7 +319,7 @@ def train(hyp, opt, device, tb_writer=None):
     print("begin training")
     for epoch in range(start_epoch, epochs):  # epoch ------------------------------------------------------------------
         model.train()
-
+        print("model.train done")
         # Update image weights (optional)
         if opt.image_weights:
             # Generate indices
