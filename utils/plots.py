@@ -125,7 +125,7 @@ def plot_images(images, targets, paths=None, fname='images.jpg', names=None, max
 
     tl = 3  # line thickness
     tf = max(tl - 1, 1)  # font thickness
-    bs, _, h, w = images.shape  # batch size, _, height, width
+    bs, ch, h, w = images.shape  # batch size, _, height, width
     bs = min(bs, max_subplots)  # limit plot images
     ns = np.ceil(bs ** 0.5)  # number of subplots (square)
 
@@ -147,6 +147,10 @@ def plot_images(images, targets, paths=None, fname='images.jpg', names=None, max
         img = img.transpose(1, 2, 0)
         if scale_factor < 1:
             img = cv2.resize(img, (w, h))
+        
+        if len(img.shape) != 3:
+            img = np.stack((img,)*3, axis=-1)
+
 
         mosaic[block_y:block_y + h, block_x:block_x + w, :] = img
         if len(targets) > 0:
