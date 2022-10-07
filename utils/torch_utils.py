@@ -16,6 +16,7 @@ import torch.backends.cudnn as cudnn
 import torch.nn as nn
 import torch.nn.functional as F
 import torchvision
+from torchinfo import summary
 
 try:
     import thop  # for FLOPS computation
@@ -203,6 +204,7 @@ def fuse_conv_and_bn(conv, bn):
 
 def model_info(model, verbose=False, img_size=640):
     # Model information. img_size may be int or list, i.e. img_size=640 or img_size=[640, 320]
+    s = img_size
     n_p = sum(x.numel() for x in model.parameters())  # number parameters
     n_g = sum(x.numel() for x in model.parameters() if x.requires_grad)  # number gradients
     if verbose:
@@ -223,6 +225,7 @@ def model_info(model, verbose=False, img_size=640):
         fs = ''
 
     logger.info(f"Model Summary: {len(list(model.modules()))} layers, {n_p} parameters, {n_g} gradients{fs}")
+    summary(model, (1, int(model.yaml.get('ch', 3)),s,s))
 
 
 def load_classifier(name='resnet101', n=2):
@@ -342,7 +345,7 @@ def revert_sync_batchnorm(module):
 
 class TracedModel(nn.Module):
 
-    def __init__(self, model=None, device=None, img_size=(640,640)): 
+    def __init__(self, model=None, device=None, img_size=(640,640), ch=3): 
         super(TracedModel, self).__init__()
         
         print(" Convert model to Traced-model... ") 
@@ -357,7 +360,7 @@ class TracedModel(nn.Module):
         self.detect_layer = self.model.model[-1]
         self.model.traced = True
         
-        rand_example = torch.rand(1, 3, img_size, img_size)
+        rand_example = torch.rand(1, ch, img_size, img_size)
         
         traced_script_module = torch.jit.trace(self.model, rand_example, strict=False)
         #traced_script_module = torch.jit.script(self.model)
