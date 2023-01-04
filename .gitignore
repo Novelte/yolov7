@@ -1,0 +1,6 @@
+coco/**
+**/__pycache__/**
+*.zip
+runs/**
+wandb/**
+models/**
