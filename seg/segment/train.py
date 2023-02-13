@@ -67,11 +67,11 @@ WORLD_SIZE = int(os.getenv('WORLD_SIZE', 1))
 
 
 def train(hyp, opt, device, callbacks):  # hyp is path/to/hyp.yaml or hyp dictionary
-    save_dir, epochs, batch_size, weights, single_cls, evolve, data, cfg, resume, noval, nosave, workers, freeze, mask_ratio = \
+    save_dir, epochs, batch_size, weights, single_cls, evolve, data, cfg, resume, noval, nosave, workers, freeze, mask_ratio, enable_augment = \
         Path(opt.save_dir), opt.epochs, opt.batch_size, opt.weights, opt.single_cls, opt.evolve, opt.data, opt.cfg, \
-        opt.resume, opt.noval, opt.nosave, opt.workers, opt.freeze, opt.mask_ratio
+        opt.resume, opt.noval, opt.nosave, opt.workers, opt.freeze, opt.mask_ratio, opt.augment
     # callbacks.run('on_pretrain_routine_start')
-
+    print(enable_augment)
     # Directories
     w = save_dir / 'weights'  # weights dir
     (w.parent if evolve else w).mkdir(parents=True, exist_ok=True)  # make dir
@@ -195,7 +195,7 @@ def train(hyp, opt, device, callbacks):  # hyp is path/to/hyp.yaml or hyp dictio
         gs,
         single_cls,
         hyp=hyp,
-        augment=True,
+        augment=enable_augment,
         cache=None if opt.cache == 'val' else opt.cache,
         rect=opt.rect,
         rank=LOCAL_RANK,
@@ -516,6 +516,9 @@ def parse_opt(known=False):
     # Instance Segmentation Args
     parser.add_argument('--mask-ratio', type=int, default=4, help='Downsample the truth masks to saving memory')
     parser.add_argument('--no-overlap', action='store_true', help='Overlap masks train faster at slightly less mAP')
+    
+    # Self define Args
+    parser.add_argument('--augment', type=bool, default=False, help='enable augmentation')
 
     # Weights & Biases arguments
     # parser.add_argument('--entity', default=None, help='W&B: Entity')
