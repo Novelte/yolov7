@@ -696,9 +696,11 @@ class LoadImagesAndLabels(Dataset):
                 im = np.load(fn)
             else:  # read image
                 if self.ch == 1:
-                    im = cv2.imread(im, cv2.IMREAD_GRAYSCALE) 
+                    # print('load_image: ', self.ch)
+                    im = cv2.imread(f, cv2.IMREAD_GRAYSCALE) 
                 else:
-                    im = cv2.imread(im, cv2.IMREAD_COLOR)  # BGR
+                    im = cv2.imread(f, cv2.IMREAD_COLOR)  # BGR
+                    # print('load_image color: ', self.ch)
                 assert im is not None, f'Image Not Found {f}'
             h0, w0 = im.shape[:2]  # orig hw
             r = self.img_size / max(h0, w0)  # ratio
@@ -1066,7 +1068,11 @@ class HUBDatasetStats():
             im.save(f_new, 'JPEG', quality=50, optimize=True)  # save
         except Exception as e:  # use OpenCV
             print(f'WARNING: HUB ops PIL failure {f}: {e}')
-            im = cv2.imread(f)
+            if self.ch == 1:
+                im = cv2.imread(f, cv2.IMREAD_GRAYSCALE) 
+            else:
+                im = cv2.imread(f, cv2.IMREAD_COLOR)  # BGR
+            
             im_height, im_width = im.shape[:2]
             r = max_dim / max(im_height, im_width)  # ratio
             if r < 1.0:  # image too large

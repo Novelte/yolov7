@@ -35,10 +35,12 @@ def create_dataloader(path,
                       prefix='',
                       shuffle=False,
                       mask_downsample_ratio=1,
-                      overlap_mask=False):
+                      overlap_mask=False,
+                      ch=3):
     if rect and shuffle:
         LOGGER.warning('WARNING: --rect is incompatible with DataLoader shuffle, setting shuffle=False')
         shuffle = False
+    print('create_dataloader: ', ch)
     with torch_distributed_zero_first(rank):  # init dataset *.cache only once if DDP
         dataset = LoadImagesAndLabelsAndMasks(
             path,
@@ -54,7 +56,8 @@ def create_dataloader(path,
             image_weights=image_weights,
             prefix=prefix,
             downsample_ratio=mask_downsample_ratio,
-            overlap=overlap_mask)
+            overlap=overlap_mask,
+            ch=ch)
 
     batch_size = min(batch_size, len(dataset))
     nd = torch.cuda.device_count()  # number of CUDA devices
@@ -94,9 +97,10 @@ class LoadImagesAndLabelsAndMasks(LoadImagesAndLabels):  # for training/testing
         prefix="",
         downsample_ratio=1,
         overlap=False,
+        ch=3
     ):
         super().__init__(path, img_size, batch_size, augment, hyp, rect, image_weights, cache_images, single_cls,
-                         stride, pad, prefix)
+                         stride, pad, prefix, ch)
         self.downsample_ratio = downsample_ratio
         self.overlap = overlap
 
@@ -199,10 +203,13 @@ class LoadImagesAndLabelsAndMasks(LoadImagesAndLabels):  # for training/testing
             labels_out[:, 1:] = torch.from_numpy(labels)
 
         # Convert
+        if self.ch == 1:
+            img = img.reshape(img.shape[0],img.shape[1],1)
+        # print('img shape', img.shape)
         img = img.transpose((2, 0, 1))[::-1]  # HWC to CHW, BGR to RGB
         img = np.ascontiguousarray(img)
 
-        return (torch.from_numpy(img), labels_out, self.im_files[index], shapes, masks)
+        return (torch.from_numpy(img.copy()), labels_out, self.im_files[index], shapes, masks)
 
     def load_mosaic(self, index):
         # YOLOv5 4-mosaic loader. Loads 1 image + 3 random images into a 4-image mosaic
