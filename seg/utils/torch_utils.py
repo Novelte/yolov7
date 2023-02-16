@@ -12,6 +12,7 @@ import warnings
 from contextlib import contextmanager
 from copy import deepcopy
 from pathlib import Path
+from torchinfo import summary
 
 import torch
 import torch.distributed as dist
@@ -268,6 +269,7 @@ def fuse_conv_and_bn(conv, bn):
 
 
 def model_info(model, verbose=False, imgsz=640):
+    s = imgsz
     # Model information. img_size may be int or list, i.e. img_size=640 or img_size=[640, 320]
     n_p = sum(x.numel() for x in model.parameters())  # number parameters
     n_g = sum(x.numel() for x in model.parameters() if x.requires_grad)  # number gradients
@@ -290,6 +292,7 @@ def model_info(model, verbose=False, imgsz=640):
 
     name = Path(model.yaml_file).stem.replace('yolov5', 'YOLOv5') if hasattr(model, 'yaml_file') else 'Model'
     LOGGER.info(f"{name} summary: {len(list(model.modules()))} layers, {n_p} parameters, {n_g} gradients{fs}")
+    summary(model, (1, int(model.yaml.get('ch', 3)),s,s))
 
 
 def scale_img(img, ratio=1.0, same_shape=False, gs=32):  # img(16,3,256,416)

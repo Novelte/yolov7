@@ -18,7 +18,7 @@ Usage - formats:
                                       yolov5s-seg.tflite             # TensorFlow Lite
                                       yolov5s-seg_edgetpu.tflite     # TensorFlow Edge TPU
 """
-
+import yaml
 import argparse
 import json
 import os
@@ -163,6 +163,15 @@ def run(
     else:
         process = process_mask  # faster
 
+    if isinstance(data, str):
+        is_coco = data.endswith('coco.yaml')
+        with open(data) as f:
+            data = yaml.load(f, Loader=yaml.SafeLoader)
+    try :
+        ch = data['ch']
+    except: 
+        ch = 3
+
     # Initialize/load model and set device
     training = model is not None
     if training:  # called by train.py
@@ -208,7 +217,7 @@ def run(
             ncm = model.model.nc
             assert ncm == nc, f'{weights} ({ncm} classes) trained on different --data than what you passed ({nc} ' \
                               f'classes). Pass correct combination of --weights and --data that are trained together.'
-        model.warmup(imgsz=(1 if pt else batch_size, 3, imgsz, imgsz))  # warmup
+        model.warmup(imgsz=(1 if pt else batch_size, ch, imgsz, imgsz))  # warmup
         pad = 0.0 if task in ('speed', 'benchmark') else 0.5
         rect = False if task == 'benchmark' else pt  # square inference for benchmarks
         task = task if task in ('train', 'val', 'test') else 'val'  # path to train/val/test images
@@ -222,7 +231,8 @@ def run(
                                        workers=workers,
                                        prefix=colorstr(f'{task}: '),
                                        overlap_mask=overlap,
-                                       mask_downsample_ratio=mask_downsample_ratio)[0]
+                                       mask_downsample_ratio=mask_downsample_ratio,
+                                       ch=ch)[0]
 
     seen = 0
     confusion_matrix = ConfusionMatrix(nc=nc)

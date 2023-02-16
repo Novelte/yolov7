@@ -226,6 +226,9 @@ def plot_images(images, targets, paths=None, fname='images.jpg', names=None):
         h = math.ceil(scale * h)
         w = math.ceil(scale * w)
         mosaic = cv2.resize(mosaic, tuple(int(x * ns) for x in (w, h)))
+        
+    if len(im.shape) != 3:
+        im = np.stack((im,)*3, axis=-1)
 
     # Annotate
     fs = int((h + w) * ns * 0.01)  # font size
