@@ -212,7 +212,7 @@ def train(hyp, opt, device, callbacks):  # hyp is path/to/hyp.yaml or hyp dictio
         overlap_mask=overlap,
         ch=ch,
     )
-    print('after creating dataloader')
+    print('after creating train_loader')
     labels = np.concatenate(dataset.labels, 0)
     mlc = int(labels[:, 0].max())  # max label class
     assert mlc < nc, f'Label class {mlc} exceeds nc={nc} in {data}. Possible class labels are 0-{nc - 1}'
@@ -234,7 +234,7 @@ def train(hyp, opt, device, callbacks):  # hyp is path/to/hyp.yaml or hyp dictio
                                        overlap_mask=overlap,
                                        prefix=colorstr('val: '),
                                        ch=ch)[0]
-
+        print('after creating val_loader')
         if not resume:
             if not opt.noautoanchor:
                 check_anchors(dataset, model=model, thr=hyp['anchor_t'], imgsz=imgsz)  # run AutoAnchor
@@ -258,7 +258,7 @@ def train(hyp, opt, device, callbacks):  # hyp is path/to/hyp.yaml or hyp dictio
     model.hyp = hyp  # attach hyperparameters to model
     model.class_weights = labels_to_class_weights(dataset.labels, nc).to(device) * nc  # attach class weights
     model.names = names
-
+    print('Start training')
     # Start training
     t0 = time.time()
     nb = len(train_loader)  # number of batches
