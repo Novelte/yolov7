@@ -71,7 +71,7 @@ def train(hyp, opt, device, callbacks):  # hyp is path/to/hyp.yaml or hyp dictio
         Path(opt.save_dir), opt.epochs, opt.batch_size, opt.weights, opt.single_cls, opt.evolve, opt.data, opt.cfg, \
         opt.resume, opt.noval, opt.nosave, opt.workers, opt.freeze, opt.mask_ratio, opt.augment
     # callbacks.run('on_pretrain_routine_start')
-    print(enable_augment)
+    # print('enable augment: ',bool(enable_augment), opt.augment)
     # Directories
     w = save_dir / 'weights'  # weights dir
     (w.parent if evolve else w).mkdir(parents=True, exist_ok=True)  # make dir
@@ -525,7 +525,7 @@ def parse_opt(known=False):
     parser.add_argument('--no-overlap', action='store_true', help='Overlap masks train faster at slightly less mAP')
     
     # Self define Args
-    parser.add_argument('--augment', type=bool, default=False, help='enable augmentation')
+    parser.add_argument('--augment', type=int, default=0, help='enable augmentation')
 
     # Weights & Biases arguments
     # parser.add_argument('--entity', default=None, help='W&B: Entity')
