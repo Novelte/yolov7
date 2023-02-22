@@ -115,10 +115,13 @@ class LoadImagesAndLabelsAndMasks(LoadImagesAndLabels):  # for training/testing
             # Load mosaic
             img, labels, segments = self.load_mosaic(index)
             shapes = None
-
+            
             # MixUp augmentation
-            if random.random() < hyp["mixup"]:
-                img, labels, segments = mixup(img, labels, segments, *self.load_mosaic(random.randint(0, self.n - 1)))
+            if random.random() < hyp["mixup"] and type(segments) != list:
+                img2, labels2, segments2 = self.load_mosaic(random.randint(0, self.n - 1))
+                if type(segments2) != list:
+                    img, labels, segments = mixup(img, labels, segments, img2, labels2, segments2)
+                # img, labels, segments = mixup(img, labels, segments, *self.load_mosaic(random.randint(0, self.n - 1)))
 
         else:
             # Load image
@@ -245,7 +248,6 @@ class LoadImagesAndLabelsAndMasks(LoadImagesAndLabels):  # for training/testing
             padh = y1a - y1b
 
             labels, segments = self.labels[index].copy(), self.segments[index].copy()
-
             if labels.size:
                 labels[:, 1:] = xywhn2xyxy(labels[:, 1:], w, h, padw, padh)  # normalized xywh to pixel xyxy format
                 segments = [xyn2xy(x, w, h, padw, padh) for x in segments]
@@ -269,6 +271,7 @@ class LoadImagesAndLabelsAndMasks(LoadImagesAndLabels):  # for training/testing
                                                       shear=self.hyp["shear"],
                                                       perspective=self.hyp["perspective"],
                                                       border=self.mosaic_border)  # border to remove
+        
         return img4, labels4, segments4
 
     @staticmethod
