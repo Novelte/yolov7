@@ -253,6 +253,8 @@ def copy_paste(im, labels, segments, p=0.5):
         result = cv2.bitwise_and(src1=im, src2=im_new)
         result = cv2.flip(result, 1)  # augment segments (flip left-right)
         i = result > 0  # pixels to replace
+        if len(result.shape) < 3:
+            result = result.reshape(result.shape[0], result.shape[1], 1)
         # i[:, :] = result.max(2).reshape(h, w, 1)  # act over ch
         im[i] = result[i]  # cv2.imwrite('debug.jpg', im)  # debug
 

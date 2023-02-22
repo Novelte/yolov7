@@ -223,7 +223,8 @@ class LoadImagesAndLabelsAndMasks(LoadImagesAndLabels):  # for training/testing
         for i, index in enumerate(indices):
             # Load image
             img, _, (h, w) = self.load_image(index)
-
+            if len(img.shape) < 3:
+                img = img.reshape(img.shape[0], img.shape[1], 1)
             # place img in img4
             if i == 0:  # top left
                 img4 = np.full((s * 2, s * 2, img.shape[2]), 114, dtype=np.uint8)  # base image with 4 tiles
