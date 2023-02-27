@@ -212,7 +212,7 @@ class LoadImages:
         images = [x for x in files if x.split('.')[-1].lower() in IMG_FORMATS]
         videos = [x for x in files if x.split('.')[-1].lower() in VID_FORMATS]
         ni, nv = len(images), len(videos)
-
+        self.ch = ch
         self.img_size = img_size
         self.stride = stride
         self.files = images + videos
@@ -264,7 +264,10 @@ class LoadImages:
             im = self.transforms(cv2.cvtColor(im0, cv2.COLOR_BGR2RGB))  # transforms
         else:
             im = letterbox(im0, self.img_size, stride=self.stride, auto=self.auto)[0]  # padded resize
+            if self.ch == 1:
+                im = im.reshape(im.shape[0],im.shape[1],1)
             im = im.transpose((2, 0, 1))[::-1]  # HWC to CHW, BGR to RGB
+                
             im = np.ascontiguousarray(im)  # contiguous
 
         return path, im, im0, self.cap, s
