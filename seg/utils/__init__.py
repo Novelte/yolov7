@@ -6,7 +6,6 @@ utils/initialization
 import contextlib
 import threading
 
-
 class TryExcept(contextlib.ContextDecorator):
     # YOLOv5 TryExcept class. Usage: @TryExcept() decorator or 'with TryExcept():' context manager
     def __init__(self, msg='default message here'):
@@ -38,8 +37,8 @@ def notebook_init(verbose=True):
     import os
     import shutil
 
-    from utils.general import check_requirements, emojis, is_colab
-    from utils.torch_utils import select_device  # imports
+    from .general import check_requirements, emojis, is_colab
+    from .torch_utils import select_device  # imports
 
     check_requirements(('psutil', 'IPython'))
     import psutil

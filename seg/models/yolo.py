@@ -21,12 +21,12 @@ if str(ROOT) not in sys.path:
 if platform.system() != 'Windows':
     ROOT = Path(os.path.relpath(ROOT, Path.cwd()))  # relative
 
-from models.common import *
-from models.experimental import *
-from utils.autoanchor import check_anchor_order
-from utils.general import LOGGER, check_version, check_yaml, make_divisible, print_args
-from utils.plots import feature_visualization
-from utils.torch_utils import (fuse_conv_and_bn, initialize_weights, model_info, profile, scale_img, select_device,
+from .common import *
+from .experimental import *
+from novelte_semantic_cloud.yolov7.seg.utils.autoanchor import check_anchor_order
+from novelte_semantic_cloud.yolov7.seg.utils.general import LOGGER, check_version, check_yaml, make_divisible, print_args
+from novelte_semantic_cloud.yolov7.seg.utils.plots import feature_visualization
+from novelte_semantic_cloud.yolov7.seg.utils.torch_utils import (fuse_conv_and_bn, initialize_weights, model_info, profile, scale_img, select_device,
                                time_sync)
 
 try:
