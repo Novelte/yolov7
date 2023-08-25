@@ -4,3 +4,5 @@ coco/**
 runs/**
 wandb/**
 models/**
+seg/runs/**
+seg/data/images/**
