@@ -5,6 +5,7 @@ import argparse
 import time
 import pdb
 import random
+import yaml
 from pytorch_nndct.apis import torch_quantizer
 import torch
 import torchvision
@@ -18,10 +19,14 @@ from utils.dataloaders import create_dataloader
 from utils.loss import ComputeLoss
 from utils.general import (LOGGER, Profile, check_dataset, check_img_size, check_requirements, check_yaml,
                            coco80_to_coco91_class, colorstr, increment_path, non_max_suppression, print_args,
-                           scale_coords, xywh2xyxy, xyxy2xywh)
+                           scale_coords, xywh2xyxy, xyxy2xywh, check_suffix, intersect_dicts)
 from utils.metrics import ConfusionMatrix, ap_per_class, box_iou
+from utils.torch_utils import (EarlyStopping, ModelEMA, de_parallel, select_device, smart_DDP, smart_optimizer,
+                               smart_resume, torch_distributed_zero_first, de_parallel)
 
 from tqdm import tqdm
+
+LOCAL_RANK = int(os.getenv('LOCAL_RANK', -1))  # https://pytorch.org/docs/stable/elastic/run.html
 
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
@@ -40,6 +45,14 @@ parser.add_argument(
     '--config_file',
     default=None,
     help='quantization configuration file')
+parser.add_argument(
+    '--hyp_file',
+    default=None,
+    help='hyper parameter file')
+parser.add_argument(
+    '--cfg_file',
+    default=None,
+    help='model parameter file')
 parser.add_argument(
     '--subset_len',
     default=None,
@@ -104,15 +117,17 @@ def process_batch(detections, labels, iouv):
             correct[matches[:, 1].astype(int), i] = True
     return torch.tensor(correct, dtype=torch.bool, device=iouv.device)
 
-def evaluate(model, data, val_loader, conf_thres=0.001, iou_thres=0.6, single_cls=False, max_det=300):
+def evaluate(model, actual_model, data, val_loader, hyp, conf_thres=0.001, iou_thres=0.6, single_cls=False, max_det=300):
+  print("in evaluate")
   model.eval()
   model = model.to(device)
   nc = 1 if single_cls else int(data['nc'])  # number of classes
   iouv = torch.linspace(0.5, 0.95, 10, device=device)  # iou vector for mAP@0.5:0.95
   niou = iouv.numel()
   dt, p, r, f1, mp, mr, map50, map = (Profile(), Profile(), Profile()), 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0
-  loss = torch.zeros(3, device=device)
-  compute_loss = ComputeLoss(model)
+  loss = torch.zeros(3, device=device)  
+  model.na = model.nl[0] // 2
+  compute_loss = ComputeLoss(actual_model)
   names = model.names if hasattr(model, 'names') else model.module.names  # get class names
   s = ('%22s' + '%11s' * 6) % ('Class', 'Images', 'Instances', 'P', 'R', 'mAP50', 'mAP50-95')
   pbar = tqdm(val_loader, desc=s, bar_format='{l_bar}{bar:10}{r_bar}{bar:-10b}')  # progress bar
@@ -136,13 +151,13 @@ def evaluate(model, data, val_loader, conf_thres=0.001, iou_thres=0.6, single_cl
       save_hybrid = False
       lb = [targets[targets[:, 0] == i, 1:] for i in range(nb)] if save_hybrid else []  # for autolabelling
       with dt[2]:
-          out = non_max_suppression(out,
-                                    conf_thres,
-                                    iou_thres,
-                                    labels=lb,
-                                    multi_label=True,
-                                    agnostic=single_cls,
-                                    max_det=max_det)
+        out = non_max_suppression(out,
+                                  conf_thres,
+                                  iou_thres,
+                                  labels=lb,
+                                  multi_label=True,
+                                  agnostic=single_cls,
+                                  max_det=max_det)
 
       # Metrics
       for si, pred in enumerate(out):
@@ -179,6 +194,32 @@ def evaluate(model, data, val_loader, conf_thres=0.001, iou_thres=0.6, single_cl
         ap50, ap = ap[:, 0], ap.mean(1)  # AP@0.5, AP@0.5:0.95
         mp, mr, map50, map = p.mean(), r.mean(), ap50.mean(), ap.mean()
       nt = np.bincount(stats[3].astype(int), minlength=nc)  # number of targets per class
+  return loss
+
+def load_training_model(hyp, model_file, cfg, single_cls, data, imgsz=640):
+
+  nc = 1 if single_cls else int(data['nc'])  # number of classes
+
+  # Load Weights
+  ckpt = torch.load(model_file, map_location='cpu')  # load checkpoint to CPU to avoid CUDA memory leak
+  model = Model(ckpt['model'].yaml, ch=3, nc=nc, anchors=hyp.get('anchors')).to(device)  # create
+  exclude = ['anchor'] if (cfg or hyp.get('anchors')) else []  # exclude keys
+  csd = ckpt['model'].float().state_dict()  # checkpoint state_dict as FP32
+  csd = intersect_dicts(csd, model.state_dict(), exclude=exclude)  # intersect
+  model.load_state_dict(csd, strict=False)  # load
+
+  # Model attributes
+  nl = de_parallel(model).model[-1].nl  # number of detection layers (to scale hyps)
+  hyp['box'] *= 3 / nl  # scale to layers
+  hyp['cls'] *= nc / 80 * 3 / nl  # scale to classes and layers
+  hyp['obj'] *= (imgsz / 640) ** 2 * 3 / nl  # scale to image size and layers
+  hyp['label_smoothing'] = False
+  model.nc = nc  # attach number of classes to model
+  model.hyp = hyp  # attach hyperparameters to model
+  model.nl = nl
+  # model.class_weights = labels_to_class_weights(dataset.labels, nc).to(device) * nc  # attach class weights
+  # model.names = names
+  return model
 
 def quantization(title='optimize',
                  model_name='',
@@ -193,6 +234,16 @@ def quantization(title='optimize',
   inspect = args.inspect
   config_file = args.config_file
   single_cls = args.single_cls
+  hyp_file = args.hyp_file
+  cfg_file = args.cfg_file
+
+  data = check_dataset(data)
+  nc = 1 if single_cls else int(data['nc']) 
+
+  if isinstance(hyp_file, str):
+    with open(hyp_file, errors='ignore') as f:
+      hyp = yaml.safe_load(f)  # load hyps dict
+
   if quant_mode != 'test' and deploy:
     deploy = False
     print(r'Warning: Exporting xmodel needs to be done in quantization test mode, turn off it in this running!')
@@ -201,8 +252,12 @@ def quantization(title='optimize',
     batch_size = 1
     subset_len = 1
 
-  model = DetectMultiBackend(file_path, device=device, dnn=False, data=data, fp16=False)
-  stride, pt, jit, engine = model.stride, model.pt, model.jit, model.engine
+  # Validation Way to load model
+  # model = DetectMultiBackend(file_path, device=device, dnn=False, data=data, fp16=False)
+  # stride, pt, jit, engine = model.stride, model.pt, model.jit, model.engine
+
+  # Training Way to load model
+  model = load_training_model(hyp, file_path, cfg_file, False, data)
 
   input = torch.randn([batch_size, 3, 640, 640])
 
@@ -229,7 +284,7 @@ def quantization(title='optimize',
     #####################################################################################
 
   # to get loss value after evaluation
-  rect = pt
+  # rect = pt
   # val_loader, _ = load_data(
   #     subset_len=subset_len,
   #     train=False,
@@ -239,19 +294,19 @@ def quantization(title='optimize',
   #     model_name=model_name)
 
   # # fast finetune model or load finetuned parameter before test
-  if finetune == True:
+  if finetune == True:  # check
+      print(model.nl)
       ft_loader = create_dataloader(data['val'],
                                     640,
                                     batch_size,
-                                    stride,
                                     single_cls,
                                     pad=0.5,
-                                    rect=rect,
+                                    rect=True,
                                     workers=8,
                                     prefix=colorstr("val"))[0]
       
       if quant_mode == 'calib':
-        quantizer.fast_finetune(evaluate, (quant_model, data, ft_loader))
+        quantizer.fast_finetune(evaluate, (quant_model, model, data, ft_loader, hyp))
       elif quant_mode == 'test':
         quantizer.load_ft_param()
    
