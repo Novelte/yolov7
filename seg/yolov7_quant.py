@@ -27,6 +27,7 @@ from utils.torch_utils import (EarlyStopping, ModelEMA, de_parallel, select_devi
                                smart_resume, torch_distributed_zero_first, de_parallel)
 
 from tqdm import tqdm
+import gc
 
 LOCAL_RANK = int(os.getenv('LOCAL_RANK', -1))  # https://pytorch.org/docs/stable/elastic/run.html
 
@@ -143,50 +144,14 @@ def evaluate(model, actual_model, data, val_loader, hyp, conf_thres=0.001, iou_t
     im = im.to(device, non_blocking=True).float() / 255
 
     targets = targets.to(device)
-    # nb, _, height, width = im.shape  # batch size, channels, height, width
     
     # Inference
-    pred = actual_model(im)  # inference, loss outputs
-
+    pred = model(im)
+    pred_adj = (pred[1:4], pred[-1])
     # Loss
-    loss, loss_items = compute_loss(pred, targets.to(device), masks=masks.to(device).float())
+    loss, loss_items = compute_loss(pred_adj, targets.to(device), masks=masks.to(device).float())
     mloss = (mloss * batch_i + loss_items) / (batch_i + 1)  # update mean losses
-
-    # # Metrics
-    # for si, pred in enumerate(out):
-    #   labels = targets[targets[:, 0] == si, 1:]
-    #   nl, npr = labels.shape[0], pred.shape[0]  # number of labels, predictions
-    #   path, shape = Path(paths[si]), shapes[si][0]
-    #   correct = torch.zeros(npr, niou, dtype=torch.bool, device=device)  # init
-    #   seen += 1
-
-    #   if npr == 0:
-    #     if nl:
-    #       stats.append((correct, *torch.zeros((2, 0), device=device), labels[:, 0]))
-    #     continue
-
-    #   # Predictions
-    #   if single_cls:
-    #     pred[:, 5] = 0
-    #   predn = pred.clone()
-    #   scale_coords(im[si].shape[1:], predn[:, :4], shape, shapes[si][1])  # native-space pred
-
-    #   # Evaluate
-    #   if nl:
-    #     tbox = xywh2xyxy(labels[:, 1:5])  # target boxes
-    #     scale_coords(im[si].shape[1:], tbox, shape, shapes[si][1])  # native-space labels
-    #     labelsn = torch.cat((labels[:, 0:1], tbox), 1)  # native-space labels
-    #     correct = process_batch(predn, labelsn, iouv)
-
-    #   stats.append((correct, pred[:, 4], pred[:, 5], labels[:, 0]))  # (correct, conf, pcls, tcls)
-
-    # Compute metrics
-    # stats = [torch.cat(x, 0).cpu().numpy() for x in zip(*stats)]  # to numpy
-    # if len(stats) and stats[0].any():
-    #   tp, fp, p, r, f1, ap, ap_class = ap_per_class(*stats, names=names)
-    #   ap50, ap = ap[:, 0], ap.mean(1)  # AP@0.5, AP@0.5:0.95
-    #   mp, mr, map50, map = p.mean(), r.mean(), ap50.mean(), ap.mean()
-    # nt = np.bincount(stats[3].astype(int), minlength=nc)  # number of targets per class
+    gc.collect()
   return mloss
 
 def load_training_model(hyp, model_file, cfg, single_cls, data, imgsz=640):
@@ -295,6 +260,7 @@ def quantization(title='optimize',
                                     pad=0.5,
                                     rect=False,
                                     workers=8,
+                                    cache=None,
                                     augment=False,
                                     mask_downsample_ratio=4,
                                     prefix=colorstr("val"))[0]
