@@ -13,10 +13,12 @@ import torchvision.transforms as transforms
 from pathlib import Path
 import numpy as np
 # Yolov7 Stuff
-from models.yolo import Model
+from models.yolo import SegmentationModel
 from models.common import DetectMultiBackend
-from utils.dataloaders import create_dataloader
-from utils.loss import ComputeLoss
+# from utils.dataloaders import create_dataloader
+from utils.segment.dataloaders import create_dataloader
+from utils.segment.loss import ComputeLoss
+from utils.segment.metrics import KEYS, fitness
 from utils.general import (LOGGER, Profile, check_dataset, check_img_size, check_requirements, check_yaml,
                            coco80_to_coco91_class, colorstr, increment_path, non_max_suppression, print_args,
                            scale_coords, xywh2xyxy, xyxy2xywh, check_suffix, intersect_dicts)
@@ -118,83 +120,74 @@ def process_batch(detections, labels, iouv):
     return torch.tensor(correct, dtype=torch.bool, device=iouv.device)
 
 def evaluate(model, actual_model, data, val_loader, hyp, conf_thres=0.001, iou_thres=0.6, single_cls=False, max_det=300):
-  print("in evaluate")
-  model.eval()
+  # model.eval()
   model = model.to(device)
+
   nc = 1 if single_cls else int(data['nc'])  # number of classes
   iouv = torch.linspace(0.5, 0.95, 10, device=device)  # iou vector for mAP@0.5:0.95
   niou = iouv.numel()
-  dt, p, r, f1, mp, mr, map50, map = (Profile(), Profile(), Profile()), 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0
-  loss = torch.zeros(3, device=device)  
-  model.na = model.nl[0] // 2
+  
+  mloss = torch.zeros(4, device=device)  # mean losses
+
+  actual_model.na = 3 // 2
   compute_loss = ComputeLoss(actual_model)
-  names = model.names if hasattr(model, 'names') else model.module.names  # get class names
-  s = ('%22s' + '%11s' * 6) % ('Class', 'Images', 'Instances', 'P', 'R', 'mAP50', 'mAP50-95')
-  pbar = tqdm(val_loader, desc=s, bar_format='{l_bar}{bar:10}{r_bar}{bar:-10b}')  # progress bar
-  for batch_i, (im, targets, paths, shapes) in enumerate(pbar):
-    with dt[0]:
-      im = im.to(device, non_blocking=True)
-      targets = targets.to(device)
-      im = im.float()  # uint8 to fp16/32
-      im /= 255  # 0 - 255 to 0.0 - 1.0
-      nb, _, height, width = im.shape  # batch size, channels, height, width
 
+  model.train()
+  actual_model.train()
+
+  LOGGER.info(('\n' + '%11s' * 7) % ('Epoch', 'GPU_mem', 'box_loss', 'obj_loss', 'cls_loss', 'Instances', 'Size'))
+  pbar = tqdm(val_loader)  # progress bar
+  
+  for batch_i, (im, targets, paths, _, masks) in enumerate(pbar):
+
+    im = im.to(device, non_blocking=True).float() / 255
+
+    targets = targets.to(device)
+    # nb, _, height, width = im.shape  # batch size, channels, height, width
+    
     # Inference
-    with dt[1]:
-      out, train_out = model(im, augment=False, val=True)  # inference, loss outputs
+    pred = actual_model(im)  # inference, loss outputs
 
-      # Loss
-      loss += compute_loss([x.float() for x in train_out], targets)[1]  # box, obj, cls
+    # Loss
+    loss, loss_items = compute_loss(pred, targets.to(device), masks=masks.to(device).float())
+    mloss = (mloss * batch_i + loss_items) / (batch_i + 1)  # update mean losses
 
-      # NMS
-      targets[:, 2:] *= torch.tensor((width, height, width, height), device=device)  # to pixels
-      save_hybrid = False
-      lb = [targets[targets[:, 0] == i, 1:] for i in range(nb)] if save_hybrid else []  # for autolabelling
-      with dt[2]:
-        out = non_max_suppression(out,
-                                  conf_thres,
-                                  iou_thres,
-                                  labels=lb,
-                                  multi_label=True,
-                                  agnostic=single_cls,
-                                  max_det=max_det)
+    # # Metrics
+    # for si, pred in enumerate(out):
+    #   labels = targets[targets[:, 0] == si, 1:]
+    #   nl, npr = labels.shape[0], pred.shape[0]  # number of labels, predictions
+    #   path, shape = Path(paths[si]), shapes[si][0]
+    #   correct = torch.zeros(npr, niou, dtype=torch.bool, device=device)  # init
+    #   seen += 1
 
-      # Metrics
-      for si, pred in enumerate(out):
-        labels = targets[targets[:, 0] == si, 1:]
-        nl, npr = labels.shape[0], pred.shape[0]  # number of labels, predictions
-        path, shape = Path(paths[si]), shapes[si][0]
-        correct = torch.zeros(npr, niou, dtype=torch.bool, device=device)  # init
-        seen += 1
+    #   if npr == 0:
+    #     if nl:
+    #       stats.append((correct, *torch.zeros((2, 0), device=device), labels[:, 0]))
+    #     continue
 
-        if npr == 0:
-          if nl:
-            stats.append((correct, *torch.zeros((2, 0), device=device), labels[:, 0]))
-          continue
+    #   # Predictions
+    #   if single_cls:
+    #     pred[:, 5] = 0
+    #   predn = pred.clone()
+    #   scale_coords(im[si].shape[1:], predn[:, :4], shape, shapes[si][1])  # native-space pred
 
-        # Predictions
-        if single_cls:
-          pred[:, 5] = 0
-        predn = pred.clone()
-        scale_coords(im[si].shape[1:], predn[:, :4], shape, shapes[si][1])  # native-space pred
+    #   # Evaluate
+    #   if nl:
+    #     tbox = xywh2xyxy(labels[:, 1:5])  # target boxes
+    #     scale_coords(im[si].shape[1:], tbox, shape, shapes[si][1])  # native-space labels
+    #     labelsn = torch.cat((labels[:, 0:1], tbox), 1)  # native-space labels
+    #     correct = process_batch(predn, labelsn, iouv)
 
-        # Evaluate
-        if nl:
-          tbox = xywh2xyxy(labels[:, 1:5])  # target boxes
-          scale_coords(im[si].shape[1:], tbox, shape, shapes[si][1])  # native-space labels
-          labelsn = torch.cat((labels[:, 0:1], tbox), 1)  # native-space labels
-          correct = process_batch(predn, labelsn, iouv)
+    #   stats.append((correct, pred[:, 4], pred[:, 5], labels[:, 0]))  # (correct, conf, pcls, tcls)
 
-        stats.append((correct, pred[:, 4], pred[:, 5], labels[:, 0]))  # (correct, conf, pcls, tcls)
-
-      # Compute metrics
-      stats = [torch.cat(x, 0).cpu().numpy() for x in zip(*stats)]  # to numpy
-      if len(stats) and stats[0].any():
-        tp, fp, p, r, f1, ap, ap_class = ap_per_class(*stats, names=names)
-        ap50, ap = ap[:, 0], ap.mean(1)  # AP@0.5, AP@0.5:0.95
-        mp, mr, map50, map = p.mean(), r.mean(), ap50.mean(), ap.mean()
-      nt = np.bincount(stats[3].astype(int), minlength=nc)  # number of targets per class
-  return loss
+    # Compute metrics
+    # stats = [torch.cat(x, 0).cpu().numpy() for x in zip(*stats)]  # to numpy
+    # if len(stats) and stats[0].any():
+    #   tp, fp, p, r, f1, ap, ap_class = ap_per_class(*stats, names=names)
+    #   ap50, ap = ap[:, 0], ap.mean(1)  # AP@0.5, AP@0.5:0.95
+    #   mp, mr, map50, map = p.mean(), r.mean(), ap50.mean(), ap.mean()
+    # nt = np.bincount(stats[3].astype(int), minlength=nc)  # number of targets per class
+  return mloss
 
 def load_training_model(hyp, model_file, cfg, single_cls, data, imgsz=640):
 
@@ -202,7 +195,7 @@ def load_training_model(hyp, model_file, cfg, single_cls, data, imgsz=640):
 
   # Load Weights
   ckpt = torch.load(model_file, map_location='cpu')  # load checkpoint to CPU to avoid CUDA memory leak
-  model = Model(ckpt['model'].yaml, ch=3, nc=nc, anchors=hyp.get('anchors')).to(device)  # create
+  model = SegmentationModel(cfg or ckpt['model'].yaml, ch=3, nc=nc, anchors=hyp.get('anchors')).to(device)  # create
   exclude = ['anchor'] if (cfg or hyp.get('anchors')) else []  # exclude keys
   csd = ckpt['model'].float().state_dict()  # checkpoint state_dict as FP32
   csd = intersect_dicts(csd, model.state_dict(), exclude=exclude)  # intersect
@@ -295,14 +288,15 @@ def quantization(title='optimize',
 
   # # fast finetune model or load finetuned parameter before test
   if finetune == True:  # check
-      print(model.nl)
       ft_loader = create_dataloader(data['val'],
                                     640,
                                     batch_size,
                                     single_cls,
                                     pad=0.5,
-                                    rect=True,
+                                    rect=False,
                                     workers=8,
+                                    augment=False,
+                                    mask_downsample_ratio=4,
                                     prefix=colorstr("val"))[0]
       
       if quant_mode == 'calib':
@@ -325,6 +319,7 @@ def quantization(title='optimize',
 
   # handle quantization result
   if quant_mode == 'calib':
+    print("exporting quant config")
     quantizer.export_quant_config()
   if deploy:
     print("deploying")
