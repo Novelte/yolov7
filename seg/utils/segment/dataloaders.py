@@ -40,7 +40,7 @@ def create_dataloader(path,
     if rect and shuffle:
         LOGGER.warning('WARNING: --rect is incompatible with DataLoader shuffle, setting shuffle=False')
         shuffle = False
-    print('create_dataloader: ', ch)
+
     with torch_distributed_zero_first(rank):  # init dataset *.cache only once if DDP
         dataset = LoadImagesAndLabelsAndMasks(
             path,
@@ -58,7 +58,7 @@ def create_dataloader(path,
             downsample_ratio=mask_downsample_ratio,
             overlap=overlap_mask,
             ch=ch)
-    print('after LoadImagesAndLabelsAndMasks')
+
     batch_size = min(batch_size, len(dataset))
     nd = torch.cuda.device_count()  # number of CUDA devices
     nw = min([os.cpu_count() // max(nd, 1), batch_size if batch_size > 1 else 0, workers])  # number of workers
@@ -66,7 +66,7 @@ def create_dataloader(path,
     loader = DataLoader if image_weights else InfiniteDataLoader  # only DataLoader allows for attribute updates
     # generator = torch.Generator()
     # generator.manual_seed(0)
-    print('before return loader')
+
     return loader(
         dataset,
         batch_size=batch_size,
