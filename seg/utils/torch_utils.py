@@ -357,6 +357,41 @@ def smart_optimizer(model, name='Adam', lr=0.001, momentum=0.9, decay=1e-5):
                 f"{len(g[1])} weight(decay=0.0), {len(g[0])} weight(decay={decay}), {len(g[2])} bias")
     return optimizer
 
+class BatchNormXd(torch.nn.modules.batchnorm._BatchNorm):
+    def _check_input_dim(self, input):
+        # The only difference between BatchNorm1d, BatchNorm2d, BatchNorm3d, etc
+        # is this method that is overwritten by the sub-class
+        # This original goal of this method was for tensor sanity checks
+        # If you're ok bypassing those sanity checks (eg. if you trust your inference
+        # to provide the right dimensional inputs), then you can just use this method
+        # for easy conversion from SyncBatchNorm
+        # (unfortunately, SyncBatchNorm does not store the original class - if it did
+        #  we could return the one that was originally created)
+        return
+
+def revert_sync_batchnorm(module):
+    # this is very similar to the function that it is trying to revert:
+    # https://github.com/pytorch/pytorch/blob/c8b3686a3e4ba63dc59e5dcfe5db3430df256833/torch/nn/modules/batchnorm.py#L679
+    module_output = module
+    if isinstance(module, torch.nn.modules.batchnorm.SyncBatchNorm):
+        new_cls = BatchNormXd
+        module_output = BatchNormXd(module.num_features,
+                                               module.eps, module.momentum,
+                                               module.affine,
+                                               module.track_running_stats)
+        if module.affine:
+            with torch.no_grad():
+                module_output.weight = module.weight
+                module_output.bias = module.bias
+        module_output.running_mean = module.running_mean
+        module_output.running_var = module.running_var
+        module_output.num_batches_tracked = module.num_batches_tracked
+        if hasattr(module, "qconfig"):
+            module_output.qconfig = module.qconfig
+    for name, child in module.named_children():
+        module_output.add_module(name, revert_sync_batchnorm(child))
+    del module
+    return module_output
 
 def smart_hub_load(repo='ultralytics/yolov5', model='yolov5s', **kwargs):
     # YOLOv5 torch.hub.load() wrapper with smart error/issue handling
@@ -442,3 +477,228 @@ class ModelEMA:
     def update_attr(self, model, include=(), exclude=('process_group', 'reducer')):
         # Update EMA attributes
         copy_attr(self.ema, model, include, exclude)
+
+class NNDctDetect(nn.Module):
+
+    def __init__(self, m, nl):
+        super(NNDctDetect, self).__init__()
+        self.m = m
+        self.nl = nl
+        from pytorch_nndct.nn import QuantStub, DeQuantStub
+        dequant = []
+        for i in range(self.nl):
+            dequant.append(DeQuantStub())
+        self.dequant = nn.ModuleList(dequant)
+            
+    
+    def forward(self, x):
+        for i in range(self.nl):
+            x[i] = self.dequant[i](self.m[i](x[i]))  # conv
+        return x
+
+class NNDctSegment(nn.Module):
+    def __init__(self, m, nl, proto, im, ia):
+        super(NNDctSegment, self).__init__()
+        self.m = m
+        self.nl = nl
+        self.ia = ia
+        self.im = im
+        self.proto = proto
+
+
+        from pytorch_nndct.nn import QuantStub, DeQuantStub
+        from models.common import Proto
+        dequant = []
+        for i in range(self.nl):
+            dequant.append(DeQuantStub())
+        self.dequant = nn.ModuleList(dequant)
+    
+    def forward(self, x):
+        p = self.proto(x[0])
+        for i in range(self.nl):
+            x[i] = self.dequant[i](self.m[i](x[i]))  # conv
+        return (x, p) if self.training else (x[0], p)
+
+class NNDctModel(nn.Module):
+
+    def __init__(self, model=None, device=None, img_size=(640,640), nndct_bitwidth=8, output_dir='nndct'): 
+        super(NNDctModel, self).__init__()
+        model = deepcopy(model)
+        origin_model = deepcopy(model)
+        import argparse
+        parser = argparse.ArgumentParser()
+        parser.add_argument('--quant_mode', default='calib', choices=['float', 'calib', 'test'], help='quant mode')
+        parser.add_argument('--dump_model', action='store_true', help='dump model')
+        opt, _ = parser.parse_known_args()
+        self.quant_mode = opt.quant_mode
+        self.dump_model = opt.dump_model
+        if self.dump_model:
+            if self.quant_mode != 'test':
+                raise ValueError
+        from models.yolo import Detect, IDetect, Segment, ISegment, IAuxDetect, IKeypoint, IBin
+        from pytorch_nndct.apis import torch_quantizer
+        
+        print(" Convert model to Traced-model... ") 
+        self.stride = model.stride
+        self.names = model.names
+        self.model = model
+
+        # self.model = revert_sync_batchnorm(self.model)
+        # fuse multi time will cause invalid param value
+        # with torch.no_grad():
+        #     self.model = model.fuse() # make sure the model is fused
+        from pytorch_nndct.nn import QuantStub, DeQuantStub
+        from pytorch_nndct import QatProcessor
+        quant = QuantStub()
+        setattr(self.model, 'quant', quant)
+        with torch.no_grad():
+            for k, v in self.model.named_parameters():
+                v.requires_grad = True  # train all layers
+                if 'implicit' in k:
+                    print('freezing %s' % k)
+                    v.requires_grad = False
+        self.model.to('cpu')
+        self.model.eval()
+
+        self.detect_layer = self.model.model[-1]
+        if type(self.detect_layer) in (Detect, IDetect):
+            modules = list(self.model.model)
+            m_ = NNDctDetect(self.detect_layer.m, self.detect_layer.nl)
+            m_.type = 'NNDctDetect'
+            m_.i = modules[-1].i
+            modules[-1].i += 1
+            m_.f = modules[-1].f
+            m_.np = sum([x.numel() for x in m_.parameters()])  # number params
+            modules.insert(-1, m_)
+            self.detect_layer.m = nn.ModuleList(nn.Identity() for _ in self.detect_layer.m)
+            modules[-1].f = -1 # from previous
+            modules[-1].np = sum([x.numel() for x in modules[-1].parameters()])
+            self.model.model = nn.Sequential(*modules)
+
+        elif type(self.detect_layer) in (Segment, ISegment):
+            modules = list(self.model.model)
+            print(type(self.detect_layer))
+            m_ = NNDctSegment(self.detect_layer.m, self.detect_layer.nl, 
+                               self.detect_layer.proto, self.detect_layer.im, self.detect_layer.ia)
+            m_.type = 'NNDctSegment'
+            m_.i = modules[-1].i
+            modules[-1].i += 1
+            m_.f = modules[-1].f
+            m_.np = sum([x.numel() for x in m_.parameters()])  # number params
+            modules.insert(-1, m_)
+
+            # Make m Identity
+            self.detect_layer.m = nn.ModuleList(nn.Identity() for _ in self.detect_layer.m)
+            # Make Proto Conv Identity
+            self.detect_layer.proto.cv1.conv = nn.Identity()
+            self.detect_layer.proto.cv2.conv = nn.Identity()
+            self.detect_layer.proto.cv3.conv = nn.Identity()
+
+            modules[-1].f = -1 # from previous
+            modules[-1].np = sum([x.numel() for x in modules[-1].parameters()])
+            modules = modules[:-1]
+            self.model.model = nn.Sequential(*modules)
+
+        elif isinstance(self.detect_layer, (IAuxDetect, IKeypoint, IBin)):
+            raise NotImplementedError
+        self.model.traced = True
+        self.output_dir = output_dir
+        
+        rand_example = torch.rand(1, 3, img_size, img_size)
+
+        print(f"\n\n\n Origin Model:\n {origin_model.model[-2:]}")
+        print(f"\n\n\n Modify Model:\n {model.model[-3:]}")
+
+        print(f"\n\n\n Origin Model:")
+        origin_model.info()
+        print(f"\n\n\n Model:")
+        model.info()
+        # print(f"\n\n\n Modify Model:\n {model.model[-3:]}")
+
+        # Dry run
+        model(rand_example.cuda())
+        print("done dry run model")
+        
+        if self.quant_mode == 'float':
+            # traced_script_module = torch.jit.trace(self.model, rand_example, strict=False)
+            #traced_script_module = torch.jit.script(self.model)
+            # traced_script_module.save("traced_model.pt")
+            # print(" traced_script_module saved! ")
+            self.quantizer = None
+            self.model = model
+        else:
+            quantizer = torch_quantizer(quant_mode=self.quant_mode,
+                                        bitwidth=nndct_bitwidth,
+                                        module=model,
+                                        input_args=rand_example,
+                                        output_dir=output_dir)
+            quant_model = quantizer.quant_model
+            self.quantizer = quantizer
+            self.model = quant_model
+        self.model.to(device)
+        self.detect_layer.to(device)
+        print(" model is traced! \n") 
+
+    def forward(self, x, augment=False, profile=False):
+        out = self.model(x)
+        out = list(out)
+        out = self.detect_layer(out)
+        return out
+
+    def export(self):
+        if self.quant_mode == 'calib':
+            self.quantizer.export_quant_config()
+        elif self.quant_mode == 'test':
+            self.quantizer.export_onnx_model(output_dir=self.output_dir, verbose=False, dynamic_batch=True, opset_version=12)
+            self.quantizer.export_torch_script(output_dir=self.output_dir, verbose=False)
+            self.quantizer.export_xmodel(output_dir=self.output_dir, deploy_check=True, dynamic_batch=True)
+
+def get_qat_model(model, device=None, img_size=640, nndct_bitwidth=8, output_dir='nndct'):
+    from models.yolo import Detect, IDetect, Segment, ISegment, IAuxDetect, IKeypoint, IBin
+    from pytorch_nndct.nn import QuantStub, DeQuantStub
+    from pytorch_nndct import QatProcessor
+    model = deepcopy(model)
+    quant = QuantStub()
+    model.train()
+    setattr(model, 'quant', quant)
+    for k, v in model.named_parameters():
+        v.requires_grad = True  # train all layers
+        if 'implicit' in k:
+            print('freezing %s' % k)
+            v.requires_grad = False
+
+    detect_layer = model.model[-1]
+    if isinstance(detect_layer, (Detect, IDetect)):
+        modules = list(model.model)
+        m_ = NNDctDetect(detect_layer.m, detect_layer.nl)
+        m_.type = 'NNDctDetect'
+        m_.i = modules[-1].i
+        modules[-1].i += 1
+        m_.f = modules[-1].f
+        m_.np = sum([x.numel() for x in m_.parameters()])  # number params
+        modules.insert(-1, m_)
+        detect_layer.m = nn.ModuleList(nn.Identity() for _ in detect_layer.m)
+        modules[-1].f = -1 # from previous
+        modules[-1].np = sum([x.numel() for x in modules[-1].parameters()])
+        model.model = nn.Sequential(*modules)
+    elif isinstance(detect_layer, (IAuxDetect, IKeypoint, IBin)):
+        raise NotImplementedError
+    model.traced = True   
+    model.to(device)
+    # Image sizes
+    rand_example = torch.rand(1, 3, img_size, img_size).to(next(model.parameters()).device)
+    # Dry run
+    model(rand_example)
+    qat_processor = QatProcessor(model, (rand_example,), bitwidth=nndct_bitwidth, mix_bit=False)
+    qat_model = qat_processor.trainable_model()
+    qat_model.stride = model.stride
+    qat_model.names = model.names
+    qat_model.origin_forward = qat_model.forward
+    def forward(instance, x):
+        x = instance.origin_forward(x)
+        x = detect_layer(x)
+        return x
+    from types import MethodType
+    qat_model.new_forward = MethodType(forward, qat_model)
+    qat_model.forward = qat_model.new_forward
+    return qat_model, qat_processor
