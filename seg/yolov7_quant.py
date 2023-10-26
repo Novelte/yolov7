@@ -134,7 +134,6 @@ def evaluate(model, actual_model, data, val_loader, hyp, conf_thres=0.001, iou_t
   compute_loss = ComputeLoss(actual_model)
 
   model.train()
-  actual_model.train()
 
   LOGGER.info(('\n' + '%11s' * 7) % ('Epoch', 'GPU_mem', 'box_loss', 'obj_loss', 'cls_loss', 'Instances', 'Size'))
   pbar = tqdm(val_loader)  # progress bar
@@ -147,7 +146,10 @@ def evaluate(model, actual_model, data, val_loader, hyp, conf_thres=0.001, iou_t
     
     # Inference
     pred = model(im)
-    pred_adj = (pred[1:4], pred[-1])
+    if len(pred) == 2 :
+      pred_adj = pred
+    else:
+      pred_adj = (pred[1:4], pred[-1])
     # Loss
     loss, loss_items = compute_loss(pred_adj, targets.to(device), masks=masks.to(device).float())
     mloss = (mloss * batch_i + loss_items) / (batch_i + 1)  # update mean losses
@@ -242,46 +244,28 @@ def quantization(title='optimize',
     #####################################################################################
 
   # to get loss value after evaluation
-  # rect = pt
-  # val_loader, _ = load_data(
-  #     subset_len=subset_len,
-  #     train=False,
-  #     batch_size=batch_size,
-  #     sample_method='random',
-  #     data_dir=data_dir,
-  #     model_name=model_name)
+  ft_loader = create_dataloader(data['val'],
+                                640,
+                                batch_size,
+                                single_cls,
+                                pad=0.5,
+                                rect=False,
+                                workers=8,
+                                cache=None,
+                                augment=False,
+                                mask_downsample_ratio=4,
+                                prefix=colorstr("val"))[0]
 
   # # fast finetune model or load finetuned parameter before test
-  if finetune == True:  # check
-      ft_loader = create_dataloader(data['val'],
-                                    640,
-                                    batch_size,
-                                    single_cls,
-                                    pad=0.5,
-                                    rect=False,
-                                    workers=8,
-                                    cache=None,
-                                    augment=False,
-                                    mask_downsample_ratio=4,
-                                    prefix=colorstr("val"))[0]
-      
-      if quant_mode == 'calib':
-        quantizer.fast_finetune(evaluate, (quant_model, model, data, ft_loader, hyp))
-      elif quant_mode == 'test':
-        quantizer.load_ft_param()
+  if finetune == True:  # check      
+    if quant_mode == 'calib':
+      quantizer.fast_finetune(evaluate, (quant_model, model, data, ft_loader, hyp))
+    elif quant_mode == 'test':
+      quantizer.load_ft_param()
    
-  # record  modules float model accuracy
-  # add modules float model accuracy here
-  # acc_org1 = 0.0
-  # acc_org5 = 0.0
-  # loss_org = 0.0
 
   #register_modification_hooks(model_gen, train=False)
-  # acc1_gen, acc5_gen, loss_gen = evaluate(quant_model, val_loader, loss_fn)
-
-  # logging accuracy
-  # print('loss: %g' % (loss_gen))
-  # print('top-1 / top-5 accuracy: %g / %g' % (acc1_gen, acc5_gen))
+  _ = evaluate(quant_model, model, data, ft_loader, hyp)
 
   # handle quantization result
   if quant_mode == 'calib':
@@ -295,7 +279,6 @@ def quantization(title='optimize',
 if __name__ == '__main__':
 
   model_name = 'yolov7_seg'
-  # file_path = os.path.join(args.model_dir, model_name + '.pt')
   file_path = args.model_dir
 
   feature_test = ' float model evaluation'
