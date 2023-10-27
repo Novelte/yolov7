@@ -15,3 +15,16 @@ This implimentation is based on [yolov5](https://github.com/ultralytics/yolov5).
 ## Image classification
 
 [code](./det)
+
+## Run Image Segmentation VAI Quantization
+
+```bash
+# Quant
+python test_nndct.py --data data/novelte_coco.yaml --img 640 --batch 8 --conf 0.001 --iou 0.65 --device 0 --weights yolov7-seg.pt --name yolov7_640_val --quant_mode calib --nndct_convert_sigmoid_to_hsigmoid --nndct_convert_silu_to_hswish
+
+# Test Quant Model
+python test_nndct.py --data data/novelte_coco.yaml --img 640 --batch 8 --conf 0.001 --iou 0.65 --device 0 --weights yolov7-seg.pt --name yolov7_640_val --quant_mode test --nndct_convert_sigmoid_to_hsigmoid --nndct_convert_silu_to_hswish
+
+# Dump / Export Quant Model
+python test_nndct.py --data data/novelte_coco.yaml --img 640 --batch 8 --conf 0.001 --iou 0.65 --device 0 --weights yolov7-seg.pt --name yolov7_640_val --quant_mode test --nndct_convert_sigmoid_to_hsigmoid --nndct_convert_silu_to_hswish --dump_model
+```
