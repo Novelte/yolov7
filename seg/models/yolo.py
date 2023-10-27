@@ -113,7 +113,11 @@ class IDetect(nn.Module):
     def forward(self, x):
         z = []  # inference output
         for i in range(self.nl):
-            x[i] = self.m[i](self.ia[i](x[i]))  # conv
+            if hasattr(self, 'dequant'):
+                x[i] = self.dequant[i](self.m[i](self.ia[i](x[i])))
+            else:    
+                x[i] = self.m[i](self.ia[i](x[i]))  # conv
+            
             bs, _, ny, nx = x[i].shape  # x(bs,255,20,20) to x(bs,3,20,20,85)
             x[i] = x[i].view(bs, self.na, self.no, ny, nx).permute(0, 1, 3, 4, 2).contiguous()
 
@@ -500,12 +504,24 @@ class BaseModel(nn.Module):
         return self._forward_once(x, profile, visualize)  # single-scale inference, train
 
     def _forward_once(self, x, profile=False, visualize=False):
+        if hasattr(self, 'quant'):
+            x = self.quant(x)
+
         y, dt = [], []  # outputs
         for m in self.model:
             if m.f != -1:  # if not from previous layer
                 x = y[m.f] if isinstance(m.f, int) else [x if j == -1 else y[j] for j in m.f]  # from earlier layers
+
+            if not hasattr(self, 'traced'):
+                self.traced=False
+
+            if self.traced:
+                if isinstance(m, Detect) or isinstance(m, IDetect) or isinstance(m, IAuxDetect) or isinstance(m, IKeypoint):
+                    break
+
             if profile:
                 self._profile_one_layer(m, x, dt)
+
             x = m(x)  # run
             y.append(x if m.i in self.save else None)  # save output
             if visualize:
@@ -554,6 +570,8 @@ class DetectionModel(BaseModel):
     # YOLOv5 detection model
     def __init__(self, cfg='yolov5s.yaml', ch=3, nc=None, anchors=None):  # model, input channels, number of classes
         super().__init__()
+        self.traced = False
+
         if isinstance(cfg, dict):
             self.yaml = cfg  # model dict
         else:  # is *.yaml

@@ -13,6 +13,7 @@ from contextlib import contextmanager
 from copy import deepcopy
 from pathlib import Path
 from torchinfo import summary
+import datetime
 
 import torch
 import torch.distributed as dist
@@ -105,41 +106,70 @@ def device_count():
         return 0
 
 
-def select_device(device='', batch_size=0, newline=True):
-    # device = None or 'cpu' or 0 or '0' or '0,1,2,3'
-    s = f'YOLOv5 🚀 {git_describe() or file_date()} Python-{platform.python_version()} torch-{torch.__version__} '
-    device = str(device).strip().lower().replace('cuda:', '').replace('none', '')  # to string, 'cuda:0' to '0'
-    cpu = device == 'cpu'
-    mps = device == 'mps'  # Apple Metal Performance Shaders (MPS)
-    if cpu or mps:
+# def select_device(device='', batch_size=0, newline=True):
+#     # device = None or 'cpu' or 0 or '0' or '0,1,2,3'
+#     s = f'YOLOv5 🚀 {git_describe() or file_date()} Python-{platform.python_version()} torch-{torch.__version__} '
+#     device = str(device).strip().lower().replace('cuda:', '').replace('none', '')  # to string, 'cuda:0' to '0'
+#     cpu = device == 'cpu'
+#     mps = device == 'mps'  # Apple Metal Performance Shaders (MPS)
+#     if cpu or mps:
+#         os.environ['CUDA_VISIBLE_DEVICES'] = '-1'  # force torch.cuda.is_available() = False
+#     elif device:  # non-cpu device requested
+#         os.environ['CUDA_VISIBLE_DEVICES'] = device  # set environment variable - must be before assert is_available()
+#         assert torch.cuda.is_available() and torch.cuda.device_count() >= len(device.replace(',', '')), \
+#             f"Invalid CUDA '--device {device}' requested, use '--device cpu' or pass valid CUDA device(s)"
+
+#     if not cpu and not mps and torch.cuda.is_available():  # prefer GPU if available
+#         devices = device.split(',') if device else '0'  # range(torch.cuda.device_count())  # i.e. 0,1,6,7
+#         n = len(devices)  # device count
+#         if n > 1 and batch_size > 0:  # check batch_size is divisible by device_count
+#             assert batch_size % n == 0, f'batch-size {batch_size} not multiple of GPU count {n}'
+#         space = ' ' * (len(s) + 1)
+#         for i, d in enumerate(devices):
+#             p = torch.cuda.get_device_properties(i)
+#             s += f"{'' if i == 0 else space}CUDA:{d} ({p.name}, {p.total_memory / (1 << 20):.0f}MiB)\n"  # bytes to MB
+#         arg = 'cuda:0'
+#     elif mps and getattr(torch, 'has_mps', False) and torch.backends.mps.is_available():  # prefer MPS if available
+#         s += 'MPS\n'
+#         arg = 'mps'
+#     else:  # revert to CPU
+#         s += 'CPU\n'
+#         arg = 'cpu'
+
+#     if not newline:
+#         s = s.rstrip()
+#     LOGGER.info(s)
+#     return torch.device(arg)
+
+def date_modified(path=__file__):
+    # return human-readable file modification date, i.e. '2021-3-26'
+    t = datetime.datetime.fromtimestamp(Path(path).stat().st_mtime)
+    return f'{t.year}-{t.month}-{t.day}'
+
+def select_device(device='', batch_size=None):
+    # device = 'cpu' or '0' or '0,1,2,3'
+    s = f'YOLOR 🚀 {git_describe() or date_modified()} torch {torch.__version__} '  # string
+    cpu = device.lower() == 'cpu'
+    if cpu:
         os.environ['CUDA_VISIBLE_DEVICES'] = '-1'  # force torch.cuda.is_available() = False
     elif device:  # non-cpu device requested
-        os.environ['CUDA_VISIBLE_DEVICES'] = device  # set environment variable - must be before assert is_available()
-        assert torch.cuda.is_available() and torch.cuda.device_count() >= len(device.replace(',', '')), \
-            f"Invalid CUDA '--device {device}' requested, use '--device cpu' or pass valid CUDA device(s)"
+        os.environ['CUDA_VISIBLE_DEVICES'] = device  # set environment variable
+        assert torch.cuda.is_available(), f'CUDA unavailable, invalid device {device} requested'  # check availability
 
-    if not cpu and not mps and torch.cuda.is_available():  # prefer GPU if available
-        devices = device.split(',') if device else '0'  # range(torch.cuda.device_count())  # i.e. 0,1,6,7
-        n = len(devices)  # device count
-        if n > 1 and batch_size > 0:  # check batch_size is divisible by device_count
+    cuda = not cpu and torch.cuda.is_available()
+    if cuda:
+        n = torch.cuda.device_count()
+        if n > 1 and batch_size:  # check that batch_size is compatible with device_count
             assert batch_size % n == 0, f'batch-size {batch_size} not multiple of GPU count {n}'
-        space = ' ' * (len(s) + 1)
-        for i, d in enumerate(devices):
+        space = ' ' * len(s)
+        for i, d in enumerate(device.split(',') if device else range(n)):
             p = torch.cuda.get_device_properties(i)
-            s += f"{'' if i == 0 else space}CUDA:{d} ({p.name}, {p.total_memory / (1 << 20):.0f}MiB)\n"  # bytes to MB
-        arg = 'cuda:0'
-    elif mps and getattr(torch, 'has_mps', False) and torch.backends.mps.is_available():  # prefer MPS if available
-        s += 'MPS\n'
-        arg = 'mps'
-    else:  # revert to CPU
+            s += f"{'' if i == 0 else space}CUDA:{d} ({p.name}, {p.total_memory / 1024 ** 2}MB)\n"  # bytes to MB
+    else:
         s += 'CPU\n'
-        arg = 'cpu'
 
-    if not newline:
-        s = s.rstrip()
-    LOGGER.info(s)
-    return torch.device(arg)
-
+    LOGGER.info(s.encode().decode('ascii', 'ignore') if platform.system() == 'Windows' else s)  # emoji-safe
+    return torch.device('cuda:0' if cuda else 'cpu')
 
 def time_sync():
     # PyTorch-accurate time
@@ -269,7 +299,7 @@ def fuse_conv_and_bn(conv, bn):
 
 
 def model_info(model, verbose=False, imgsz=640):
-    s = imgsz
+
     # Model information. img_size may be int or list, i.e. img_size=640 or img_size=[640, 320]
     n_p = sum(x.numel() for x in model.parameters())  # number parameters
     n_g = sum(x.numel() for x in model.parameters() if x.requires_grad)  # number gradients
@@ -292,7 +322,7 @@ def model_info(model, verbose=False, imgsz=640):
 
     name = Path(model.yaml_file).stem.replace('yolov5', 'YOLOv5') if hasattr(model, 'yaml_file') else 'Model'
     LOGGER.info(f"{name} summary: {len(list(model.modules()))} layers, {n_p} parameters, {n_g} gradients{fs}")
-    summary(model, (1, int(model.yaml.get('ch', 3)),s,s))
+    summary(model, (1, int(model.yaml.get('ch', 3)),imgsz,imgsz))
 
 
 def scale_img(img, ratio=1.0, same_shape=False, gs=32):  # img(16,3,256,416)
@@ -496,28 +526,15 @@ class NNDctDetect(nn.Module):
             x[i] = self.dequant[i](self.m[i](x[i]))  # conv
         return x
 
-class NNDctSegment(nn.Module):
-    def __init__(self, m, nl, proto, im, ia):
-        super(NNDctSegment, self).__init__()
-        self.m = m
-        self.nl = nl
-        self.ia = ia
-        self.im = im
-        self.proto = proto
+# class NNDctSegment(IDetect):
+#     def __init__(self, isegment):
+#         super().__init__()
 
 
-        from pytorch_nndct.nn import QuantStub, DeQuantStub
-        from models.common import Proto
-        dequant = []
-        for i in range(self.nl):
-            dequant.append(DeQuantStub())
-        self.dequant = nn.ModuleList(dequant)
-    
-    def forward(self, x):
-        p = self.proto(x[0])
-        for i in range(self.nl):
-            x[i] = self.dequant[i](self.m[i](x[i]))  # conv
-        return (x, p) if self.training else (x[0], p)
+#     def forward(self, x):
+#         p = self.proto(x[0], dequant=True)
+#         x = self.detect(self, x)
+#         return (x, p) if self.training else (x[0], p) if self.export else (x[0], (x[1], p))
 
 class NNDctModel(nn.Module):
 
@@ -577,27 +594,32 @@ class NNDctModel(nn.Module):
 
         elif type(self.detect_layer) in (Segment, ISegment):
             modules = list(self.model.model)
-            print(type(self.detect_layer))
-            m_ = NNDctSegment(self.detect_layer.m, self.detect_layer.nl, 
-                               self.detect_layer.proto, self.detect_layer.im, self.detect_layer.ia)
-            m_.type = 'NNDctSegment'
-            m_.i = modules[-1].i
-            modules[-1].i += 1
-            m_.f = modules[-1].f
-            m_.np = sum([x.numel() for x in m_.parameters()])  # number params
-            modules.insert(-1, m_)
 
-            # Make m Identity
-            self.detect_layer.m = nn.ModuleList(nn.Identity() for _ in self.detect_layer.m)
-            # Make Proto Conv Identity
-            self.detect_layer.proto.cv1.conv = nn.Identity()
-            self.detect_layer.proto.cv2.conv = nn.Identity()
-            self.detect_layer.proto.cv3.conv = nn.Identity()
+            m_dequant = nn.ModuleList(DeQuantStub() for x in range(modules[-1].nl))
+            setattr(modules[-1], 'dequant', m_dequant)
+            setattr(modules[-1].proto.cv1, 'dequant', DeQuantStub())
+            setattr(modules[-1].proto.cv2, 'dequant', DeQuantStub())
+            setattr(modules[-1].proto.cv3, 'dequant', DeQuantStub())
+            # print(type(self.detect_layer))
+            # m_ = NNDctSegment(self.detect_layer.m, self.detect_layer.nl, 
+            #                    self.detect_layer.proto, self.detect_layer.im, self.detect_layer.ia)
+            # m_.type = 'NNDctSegment'
+            # m_.i = modules[-1].i
+            # modules[-1].i += 1
+            # m_.f = modules[-1].f
+            # m_.np = sum([x.numel() for x in m_.parameters()])  # number params
+            # modules.insert(-1, m_)
 
-            modules[-1].f = -1 # from previous
-            modules[-1].np = sum([x.numel() for x in modules[-1].parameters()])
-            modules = modules[:-1]
-            self.model.model = nn.Sequential(*modules)
+            # # Make m Identity
+            # self.detect_layer.m = nn.ModuleList(nn.Identity() for _ in self.detect_layer.m)
+            # # self.detect_layer.ia = None
+            # # self.detect_layer.im = None
+            # # self.detect_layer.proto = None
+
+            # # modules[-1].f = -1 # from previous
+            # modules[-1].np = sum([x.numel() for x in modules[-1].parameters()])
+            # modules = modules[:-1]
+            # self.model.model = nn.Sequential(*modules)
 
         elif isinstance(self.detect_layer, (IAuxDetect, IKeypoint, IBin)):
             raise NotImplementedError
@@ -606,14 +628,13 @@ class NNDctModel(nn.Module):
         
         rand_example = torch.rand(1, 3, img_size, img_size)
 
-        print(f"\n\n\n Origin Model:\n {origin_model.model[-2:]}")
+        # print(f"\n\n\n Origin Model:\n {origin_model.model[-2:]}")
         print(f"\n\n\n Modify Model:\n {model.model[-3:]}")
 
-        print(f"\n\n\n Origin Model:")
-        origin_model.info()
-        print(f"\n\n\n Model:")
-        model.info()
-        # print(f"\n\n\n Modify Model:\n {model.model[-3:]}")
+        # print(f"\n\n\n Origin Model:")
+        # origin_model.info(verbose=True)
+        print(f"\n\n\n Modify Model:")
+        model.info(verbose=True)
 
         # Dry run
         model(rand_example.cuda())
