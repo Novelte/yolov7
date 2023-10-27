@@ -689,7 +689,7 @@ def get_qat_model(model, device=None, img_size=640, nndct_bitwidth=8, output_dir
             v.requires_grad = False
 
     detect_layer = model.model[-1]
-    if isinstance(detect_layer, (Detect, IDetect)):
+    if type(self.detect_layer) in (Detect, IDetect):
         modules = list(model.model)
         m_ = NNDctDetect(detect_layer.m, detect_layer.nl)
         m_.type = 'NNDctDetect'
@@ -702,6 +702,13 @@ def get_qat_model(model, device=None, img_size=640, nndct_bitwidth=8, output_dir
         modules[-1].f = -1 # from previous
         modules[-1].np = sum([x.numel() for x in modules[-1].parameters()])
         model.model = nn.Sequential(*modules)
+    elif type(detect_layer) in (Segment, ISegment):
+        modules = list(model.model)
+        m_dequant = nn.ModuleList(DeQuantStub() for x in range(modules[-1].nl))
+        setattr(modules[-1], 'dequant', m_dequant)
+        setattr(modules[-1].proto.cv1, 'dequant', DeQuantStub())
+        setattr(modules[-1].proto.cv2, 'dequant', DeQuantStub())
+        setattr(modules[-1].proto.cv3, 'dequant', DeQuantStub())
     elif isinstance(detect_layer, (IAuxDetect, IKeypoint, IBin)):
         raise NotImplementedError
     model.traced = True   
