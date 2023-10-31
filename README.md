@@ -27,4 +27,7 @@ python test_nndct.py --data data/novelte_coco.yaml --img 640 --batch 8 --conf 0.
 
 # Dump / Export Quant Model
 python test_nndct.py --data data/novelte_coco.yaml --img 640 --batch 8 --conf 0.001 --iou 0.65 --device 0 --weights yolov7-seg.pt --name yolov7_640_val --quant_mode test --nndct_convert_sigmoid_to_hsigmoid --nndct_convert_silu_to_hswish --dump_model
+
+# To Compile Xmodel with arch.json
+vai_c_xir --arch arch.json -x SegmentationModel_0_int.xmodel -n yolov7_seg_c.xmodel
 ```
