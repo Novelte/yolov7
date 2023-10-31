@@ -541,7 +541,8 @@ class NNDctSegment(nn.Module):
     def forward(self, x):
         p = self.proto_dequant(self.proto(x[0]))
         for i in range(self.nl):
-            x[i] = self.dequant[i](self.m[i](self.ia[i](x[i])))  # conv
+            # x[i] = self.dequant[i](self.m[i](self.ia[i](x[i])))  # conv
+            x[i] = self.dequant[i](self.m[i]((x[i])))
         return (p, x)
 
 class NNDctModel(nn.Module):
