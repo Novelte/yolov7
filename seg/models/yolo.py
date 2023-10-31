@@ -113,11 +113,7 @@ class IDetect(nn.Module):
     def forward(self, x):
         z = []  # inference output
         for i in range(self.nl):
-            if hasattr(self, 'dequant'):
-                x[i] = self.dequant[i](self.m[i](self.ia[i](x[i])))
-            else:    
-                x[i] = self.m[i](self.ia[i](x[i]))  # conv
-            
+            x[i] = self.m[i](self.ia[i](x[i]))  # conv
             bs, _, ny, nx = x[i].shape  # x(bs,255,20,20) to x(bs,3,20,20,85)
             x[i] = x[i].view(bs, self.na, self.no, ny, nx).permute(0, 1, 3, 4, 2).contiguous()
 
@@ -180,7 +176,10 @@ class ISegment(IDetect):
 
     def forward(self, x):
         p = self.proto(x[0])
-        x = self.detect(self, x)
+        if hasattr(self, 'dequant'):
+            x = self.detect(self, x[1:])
+        else:
+            x = self.detect(self, x)
         return (x, p) if self.training else (x[0], p) if self.export else (x[0], (x[1], p))
 
 

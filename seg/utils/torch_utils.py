@@ -526,22 +526,29 @@ class NNDctDetect(nn.Module):
             x[i] = self.dequant[i](self.m[i](x[i]))  # conv
         return x
 
-# class NNDctSegment(IDetect):
-#     def __init__(self, isegment):
-#         super().__init__()
+class NNDctSegment(nn.Module):
+    def __init__(self, m, nl, ia, proto):
+        super(NNDctSegment, self).__init__()
+        self.m = m
+        self.nl = nl
+        self.ia = deepcopy(ia)
+        self.proto = deepcopy(proto)
+        
+        from pytorch_nndct.nn import DeQuantStub
+        self.dequant = nn.ModuleList(DeQuantStub() for _ in range(nl))
+        self.proto_dequant = DeQuantStub()
 
-
-#     def forward(self, x):
-#         p = self.proto(x[0], dequant=True)
-#         x = self.detect(self, x)
-#         return (x, p) if self.training else (x[0], p) if self.export else (x[0], (x[1], p))
+    def forward(self, x):
+        p = self.proto_dequant(self.proto(x[0]))
+        for i in range(self.nl):
+            x[i] = self.dequant[i](self.m[i](self.ia[i](x[i])))  # conv
+        return (p, x)
 
 class NNDctModel(nn.Module):
 
     def __init__(self, model=None, device=None, img_size=(640,640), nndct_bitwidth=8, output_dir='nndct'): 
         super(NNDctModel, self).__init__()
         model = deepcopy(model)
-        origin_model = deepcopy(model)
         import argparse
         parser = argparse.ArgumentParser()
         parser.add_argument('--quant_mode', default='calib', choices=['float', 'calib', 'test'], help='quant mode')
@@ -595,51 +602,40 @@ class NNDctModel(nn.Module):
         elif type(self.detect_layer) in (Segment, ISegment):
             modules = list(self.model.model)
 
-            m_dequant = nn.ModuleList(DeQuantStub() for x in range(modules[-1].nl))
-            setattr(modules[-1], 'dequant', m_dequant)
-            setattr(modules[-1].proto.cv1, 'dequant', DeQuantStub())
-            setattr(modules[-1].proto.cv2, 'dequant', DeQuantStub())
-            setattr(modules[-1].proto.cv3, 'dequant', DeQuantStub())
-            # print(type(self.detect_layer))
-            # m_ = NNDctSegment(self.detect_layer.m, self.detect_layer.nl, 
-            #                    self.detect_layer.proto, self.detect_layer.im, self.detect_layer.ia)
-            # m_.type = 'NNDctSegment'
-            # m_.i = modules[-1].i
-            # modules[-1].i += 1
-            # m_.f = modules[-1].f
-            # m_.np = sum([x.numel() for x in m_.parameters()])  # number params
-            # modules.insert(-1, m_)
+            m_ = NNDctSegment(self.detect_layer.m, self.detect_layer.nl, 
+                              self.detect_layer.ia, self.detect_layer.proto)
+            m_.type = 'NNDctSegment'
+            m_.i = modules[-1].i
+            modules[-1].i += 1
+            m_.f = modules[-1].f
+            m_.np = sum([x.numel() for x in m_.parameters()])  # number params
+            modules.insert(-1, m_)
 
-            # # Make m Identity
-            # self.detect_layer.m = nn.ModuleList(nn.Identity() for _ in self.detect_layer.m)
-            # # self.detect_layer.ia = None
-            # # self.detect_layer.im = None
-            # # self.detect_layer.proto = None
-
-            # # modules[-1].f = -1 # from previous
-            # modules[-1].np = sum([x.numel() for x in modules[-1].parameters()])
-            # modules = modules[:-1]
-            # self.model.model = nn.Sequential(*modules)
+            # Make m Identity
+            self.detect_layer.m = nn.ModuleList(nn.Identity() for _ in self.detect_layer.m)
+            self.detect_layer.ia = nn.ModuleList(nn.Identity() for _ in self.detect_layer.ia)
+            self.detect_layer.im = nn.ModuleList(nn.Identity() for _ in self.detect_layer.im)
+            self.detect_layer.proto = nn.Identity()
+            setattr(self.detect_layer, 'dequant', True)
+            setattr(modules[-1], 'dequant', True)
+            modules[-1].f = -1 # from previous
+            modules[-1].np = sum([x.numel() for x in modules[-1].parameters()])
+            self.model.model = nn.Sequential(*modules)
 
         elif isinstance(self.detect_layer, (IAuxDetect, IKeypoint, IBin)):
             raise NotImplementedError
+
         self.model.traced = True
         self.output_dir = output_dir
         
         rand_example = torch.rand(1, 3, img_size, img_size)
-
-        # print(f"\n\n\n Origin Model:\n {origin_model.model[-2:]}")
-        print(f"\n\n\n Modify Model:\n {model.model[-3:]}")
-
-        # print(f"\n\n\n Origin Model:")
-        # origin_model.info(verbose=True)
-        print(f"\n\n\n Modify Model:")
-        model.info(verbose=True)
-
         # Dry run
-        model(rand_example.cuda())
+        self.model(rand_example)
         print("done dry run model")
-        
+
+        print(f"\n\n\n Modify Model:")
+        self.model.info(verbose=False)
+
         if self.quant_mode == 'float':
             # traced_script_module = torch.jit.trace(self.model, rand_example, strict=False)
             #traced_script_module = torch.jit.script(self.model)

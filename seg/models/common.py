@@ -102,7 +102,7 @@ class Conv(nn.Module):
             
     def forward_fuse(self, x):
         if hasattr(self, 'dequant'):
-            return self.act(self.dequant(self.conv(x)))
+            return self.dequant(self.act(self.conv(x)))
         else:
             return self.act(self.conv(x))
 
