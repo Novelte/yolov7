@@ -198,10 +198,11 @@ def test(data,
         total = 1
     else:
         if model.quant_mode == 'calib':
-            total = 1000
+            total = min(1000, len(dataloader))
         else:
             total = len(dataloader)
-    for batch_i, (img, targets, paths, shapes, masks) in enumerate(tqdm(dataloader, desc=s, total=total)):
+    pbar = tqdm(dataloader, desc=s, bar_format='{l_bar}{bar:10}{r_bar}{bar:-10b}', total=total)  # progress bar
+    for batch_i, (img, targets, paths, shapes, masks) in enumerate(pbar):
         img = img.to(device, non_blocking=True)
         img = img.half() if half else img.float()  # uint8 to fp16/32
         img /= 255.0  # 0 - 255 to 0.0 - 1.0
@@ -293,11 +294,13 @@ def test(data,
         if plots and batch_i < 3:
             if len(plot_masks):
                 plot_masks = torch.cat(plot_masks, dim=0)
-            Thread(target=plot_images_and_masks, args=(img, targets, masks, paths, 
+            Thread(target=plot_images_and_masks, args=(img, targets, 
+                                                       masks, paths, 
                                                        save_dir / f'val_batch{batch_i}_labels.jpg', names), daemon=True).start() # label
-            Thread(target=plot_images_and_masks, args=(img, output_to_target(out, max_det=15), plot_masks, paths,
+            Thread(target=plot_images_and_masks, args=(img, output_to_target(out, max_det=50), 
+                                                       plot_masks, paths,
                                                        save_dir / f'val_batch{batch_i}_pred.jpg', names), daemon=True).start() # pred
-
+            
         if model.dump_model:
             break
         if model.quant_mode == 'calib':
@@ -367,15 +370,6 @@ def test(data,
 
     # Return results
     model.float()  # for training
-    # if not training:
-    #     s = f"\n{len(list(save_dir.glob('labels/*.txt')))} labels saved to {save_dir / 'labels'}" if save_txt else ''
-    #     print(f"Results saved to {save_dir}{s}")
-    # maps = np.zeros(nc) + map
-    # for i, c in enumerate(ap_class):
-    #     maps[c] = ap[i]
-    # return (mp, mr, map50, map, *(loss.cpu() / len(dataloader)).tolist()), maps, t
-    # Return results
-
     if not training:
         s = f"\n{len(list(save_dir.glob('labels/*.txt')))} labels saved to {save_dir / 'labels'}" if save_txt else ''
         LOGGER.info(f"Results saved to {colorstr('bold', save_dir)}{s}")
