@@ -95,16 +95,10 @@ class Conv(nn.Module):
         self.act = nn.SiLU() if act is True else (act if isinstance(act, nn.Module) else nn.Identity())
 
     def forward(self, x):
-        if hasattr(self, 'dequant'):
-            return self.act(self.bn(self.dequant(self.conv(x))))
-        else:
-            return self.act(self.bn(self.conv(x)))
+        return self.act(self.bn(self.conv(x)))
             
     def forward_fuse(self, x):
-        if hasattr(self, 'dequant'):
-            return self.dequant(self.act(self.conv(x)))
-        else:
-            return self.act(self.conv(x))
+        return self.act(self.conv(x))
 
 class DWConv(Conv):
     # Depth-wise convolution class

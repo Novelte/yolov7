@@ -132,7 +132,6 @@ class IDetect(nn.Module):
                     wh = (wh * 2) ** 2 * self.anchor_grid[i]  # wh
                     y = torch.cat((xy, wh, etc), 4)
                 z.append(y.view(bs, -1, self.no))
-
         return x if self.training else (torch.cat(z, 1),) if self.export else (torch.cat(z, 1), x)
 
     def _make_grid(self, nx=20, ny=20, i=0, torch_1_10=check_version(torch.__version__, '1.10.0')):
@@ -177,7 +176,7 @@ class ISegment(IDetect):
     def forward(self, x):
         p = self.proto(x[0])
         if hasattr(self, 'dequant'):
-            x = self.detect(self, x[1:])
+            x = self.detect(self, x[1])
         else:
             x = self.detect(self, x)
         return (x, p) if self.training else (x[0], p) if self.export else (x[0], (x[1], p))

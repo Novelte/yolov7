@@ -105,42 +105,6 @@ def device_count():
     except Exception:
         return 0
 
-
-# def select_device(device='', batch_size=0, newline=True):
-#     # device = None or 'cpu' or 0 or '0' or '0,1,2,3'
-#     s = f'YOLOv5 🚀 {git_describe() or file_date()} Python-{platform.python_version()} torch-{torch.__version__} '
-#     device = str(device).strip().lower().replace('cuda:', '').replace('none', '')  # to string, 'cuda:0' to '0'
-#     cpu = device == 'cpu'
-#     mps = device == 'mps'  # Apple Metal Performance Shaders (MPS)
-#     if cpu or mps:
-#         os.environ['CUDA_VISIBLE_DEVICES'] = '-1'  # force torch.cuda.is_available() = False
-#     elif device:  # non-cpu device requested
-#         os.environ['CUDA_VISIBLE_DEVICES'] = device  # set environment variable - must be before assert is_available()
-#         assert torch.cuda.is_available() and torch.cuda.device_count() >= len(device.replace(',', '')), \
-#             f"Invalid CUDA '--device {device}' requested, use '--device cpu' or pass valid CUDA device(s)"
-
-#     if not cpu and not mps and torch.cuda.is_available():  # prefer GPU if available
-#         devices = device.split(',') if device else '0'  # range(torch.cuda.device_count())  # i.e. 0,1,6,7
-#         n = len(devices)  # device count
-#         if n > 1 and batch_size > 0:  # check batch_size is divisible by device_count
-#             assert batch_size % n == 0, f'batch-size {batch_size} not multiple of GPU count {n}'
-#         space = ' ' * (len(s) + 1)
-#         for i, d in enumerate(devices):
-#             p = torch.cuda.get_device_properties(i)
-#             s += f"{'' if i == 0 else space}CUDA:{d} ({p.name}, {p.total_memory / (1 << 20):.0f}MiB)\n"  # bytes to MB
-#         arg = 'cuda:0'
-#     elif mps and getattr(torch, 'has_mps', False) and torch.backends.mps.is_available():  # prefer MPS if available
-#         s += 'MPS\n'
-#         arg = 'mps'
-#     else:  # revert to CPU
-#         s += 'CPU\n'
-#         arg = 'cpu'
-
-#     if not newline:
-#         s = s.rstrip()
-#     LOGGER.info(s)
-#     return torch.device(arg)
-
 def date_modified(path=__file__):
     # return human-readable file modification date, i.e. '2021-3-26'
     t = datetime.datetime.fromtimestamp(Path(path).stat().st_mtime)
@@ -527,22 +491,19 @@ class NNDctDetect(nn.Module):
         return x
 
 class NNDctSegment(nn.Module):
-    def __init__(self, m, nl, ia, proto):
+    def __init__(self, m, nl, proto):
         super(NNDctSegment, self).__init__()
         self.m = m
         self.nl = nl
-        self.ia = deepcopy(ia)
         self.proto = deepcopy(proto)
         
         from pytorch_nndct.nn import DeQuantStub
-        self.dequant = nn.ModuleList(DeQuantStub() for _ in range(nl))
-        self.proto_dequant = DeQuantStub()
+        self.dequant = nn.ModuleList(DeQuantStub() for _ in range(nl+1))
 
     def forward(self, x):
-        p = self.proto_dequant(self.proto(x[0]))
+        p = self.dequant[0](self.proto(x[0]))
         for i in range(self.nl):
-            # x[i] = self.dequant[i](self.m[i](self.ia[i](x[i])))  # conv
-            x[i] = self.dequant[i](self.m[i]((x[i])))
+            x[i] = self.dequant[i+1](self.m[i]((x[i])))
         return (p, x)
 
 class NNDctModel(nn.Module):
@@ -602,9 +563,7 @@ class NNDctModel(nn.Module):
 
         elif type(self.detect_layer) in (Segment, ISegment):
             modules = list(self.model.model)
-
-            m_ = NNDctSegment(self.detect_layer.m, self.detect_layer.nl, 
-                              self.detect_layer.ia, self.detect_layer.proto)
+            m_ = NNDctSegment(self.detect_layer.m, self.detect_layer.nl, self.detect_layer.proto)
             m_.type = 'NNDctSegment'
             m_.i = modules[-1].i
             modules[-1].i += 1
@@ -618,7 +577,6 @@ class NNDctModel(nn.Module):
             self.detect_layer.im = nn.ModuleList(nn.Identity() for _ in self.detect_layer.im)
             self.detect_layer.proto = nn.Identity()
             setattr(self.detect_layer, 'dequant', True)
-            setattr(modules[-1], 'dequant', True)
             modules[-1].f = -1 # from previous
             modules[-1].np = sum([x.numel() for x in modules[-1].parameters()])
             self.model.model = nn.Sequential(*modules)
@@ -636,7 +594,6 @@ class NNDctModel(nn.Module):
 
         print(f"\n\n\n Modify Model:")
         self.model.info(verbose=False)
-
         if self.quant_mode == 'float':
             # traced_script_module = torch.jit.trace(self.model, rand_example, strict=False)
             #traced_script_module = torch.jit.script(self.model)
@@ -686,7 +643,7 @@ def get_qat_model(model, device=None, img_size=640, nndct_bitwidth=8, output_dir
             v.requires_grad = False
 
     detect_layer = model.model[-1]
-    if type(self.detect_layer) in (Detect, IDetect):
+    if type(detect_layer) in (Detect, IDetect):
         modules = list(model.model)
         m_ = NNDctDetect(detect_layer.m, detect_layer.nl)
         m_.type = 'NNDctDetect'
@@ -701,11 +658,24 @@ def get_qat_model(model, device=None, img_size=640, nndct_bitwidth=8, output_dir
         model.model = nn.Sequential(*modules)
     elif type(detect_layer) in (Segment, ISegment):
         modules = list(model.model)
-        m_dequant = nn.ModuleList(DeQuantStub() for x in range(modules[-1].nl))
-        setattr(modules[-1], 'dequant', m_dequant)
-        setattr(modules[-1].proto.cv1, 'dequant', DeQuantStub())
-        setattr(modules[-1].proto.cv2, 'dequant', DeQuantStub())
-        setattr(modules[-1].proto.cv3, 'dequant', DeQuantStub())
+        m_ = NNDctSegment(detect_layer.m, detect_layer.nl, detect_layer.proto)
+        m_.type = 'NNDctSegment'
+        m_.i = modules[-1].i
+        modules[-1].i += 1
+        m_.f = modules[-1].f
+        m_.np = sum([x.numel() for x in m_.parameters()])  # number params
+        modules.insert(-1, m_)
+
+        # Make m Identity
+        detect_layer.m = nn.ModuleList(nn.Identity() for _ in detect_layer.m)
+        detect_layer.ia = nn.ModuleList(nn.Identity() for _ in detect_layer.ia)
+        detect_layer.im = nn.ModuleList(nn.Identity() for _ in detect_layer.im)
+        detect_layer.proto = nn.Identity()
+        setattr(detect_layer, 'dequant', True)
+        # setattr(modules[-1], 'dequant', True)
+        modules[-1].f = -1 # from previous
+        modules[-1].np = sum([x.numel() for x in modules[-1].parameters()])
+        model.model = nn.Sequential(*modules)
     elif isinstance(detect_layer, (IAuxDetect, IKeypoint, IBin)):
         raise NotImplementedError
     model.traced = True   
